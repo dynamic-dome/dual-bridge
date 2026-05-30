@@ -32,6 +32,10 @@ def _write_fake_claude(tmp: Path, *, answer: str, exit_code: int = 0) -> str:
     py = bindir / "fake_claude.py"
     py.write_text(
         "import sys\n"
+        "try:\n"
+        "    sys.stdout.reconfigure(encoding='utf-8')\n"
+        "except Exception:\n"
+        "    pass\n"
         f"ans = {answer!r}\n"
         f"code = {exit_code}\n"
         "if ans:\n"
