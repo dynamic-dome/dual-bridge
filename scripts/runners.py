@@ -8,19 +8,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 
 @dataclass
 class RunnerResult:
     status: str                       # "done" | "error"
     antwort: str = ""
-    branch: Optional[str] = None
-    commit: Optional[str] = None
-    changed_files: list = field(default_factory=list)
-    error_text: Optional[str] = None
-    stderr_excerpt: Optional[str] = None
-    note: Optional[str] = None
+    branch: str | None = None
+    commit: str | None = None
+    changed_files: list[str] = field(default_factory=list)
+    error_text: str | None = None
+    stderr_excerpt: str | None = None
+    note: str | None = None
 
     def to_markdown(self, task_id: str, claimed_by: str, claimed_at: str) -> str:
         lines = ["## Quelle",
@@ -46,7 +46,7 @@ class RunnerResult:
         return "\n".join(lines)
 
 
-def run_echo(auftrag: str, fm: dict, workroot: Optional[Path]) -> RunnerResult:
+def run_echo(auftrag: str, fm: dict, workroot: Path | None) -> RunnerResult:
     """Stage-0 echo: reflect the auftrag back, no LLM."""
     return RunnerResult(
         status="done",
