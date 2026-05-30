@@ -12,8 +12,6 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
-from typing import Optional
 
 from runners import RunnerResult, register_runner
 
@@ -64,7 +62,7 @@ def _answer_from_json(value: object) -> str:
     return str(value)
 
 
-def run_claude(auftrag: str, fm: dict, workroot, claude_bin: Optional[str] = None,
+def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
                timeout: int = 600) -> RunnerResult:
     """Run one task via `claude -p`. Text only; never raises (spec contract)."""
     exe = claude_bin or os.environ.get("DUAL_BRIDGE_CLAUDE_BIN") or shutil.which("claude")
@@ -95,7 +93,7 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: Optional[str] = Non
     return RunnerResult(status="done", antwort=antwort)
 
 
-def _tail(text: Optional[str], limit: int = 2000) -> Optional[str]:
+def _tail(text: str | None, limit: int = 2000) -> str | None:
     if not text:
         return None
     return text[-limit:]
