@@ -66,10 +66,31 @@ def test_registry_has_echo() -> None:
     print("  runner OK — RUNNERS registry contains echo")
 
 
+def test_codex_registered_and_allowlist() -> None:
+    import runners, codex_adapter
+    importlib.reload(runners); importlib.reload(codex_adapter)
+    assert "codex" in runners.RUNNERS, "codex runner not registered"
+    # Allowlist: a repo not on a non-empty allowlist -> error before any clone.
+    os.environ["DUAL_BRIDGE_REPO_ALLOWLIST"] = "github.com/dynamic-dome/*"
+    try:
+        r = runners.RUNNERS["codex"](
+            auftrag="x",
+            fm={"task_id": "20260531-000000-000000-0-aaaa",
+                "repo": "https://evil.example/malware.git", "base_branch": "main"},
+            workroot=Path(tempfile.mkdtemp(prefix="cdx-al-")),
+        )
+    finally:
+        del os.environ["DUAL_BRIDGE_REPO_ALLOWLIST"]
+    assert r.status == "error" and "allowlist" in (r.error_text or "").lower(), \
+        f"expected allowlist rejection, got {r.status}/{r.error_text}"
+    print("  codex OK — registered + repo-allowlist rejects non-listed repo before clone")
+
+
 def main() -> int:
     print("=== Stage-2a Lane-Tests ===")
     tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat,
-             test_runner_result_to_markdown, test_run_echo, test_registry_has_echo]
+             test_runner_result_to_markdown, test_run_echo, test_registry_has_echo,
+             test_codex_registered_and_allowlist]
     failed = 0
     for t in tests:
         try:
