@@ -78,17 +78,28 @@ def lane_processed(lane: str) -> Path:
 
 
 def lane_errors(lane: str) -> Path:
+    # Quarantine for malformed/hostile task files — kept OUT of ensure_dirs()
+    # and separate from _processed/ so it is visibly not-normal. Created lazily
+    # by the poller (handoff_poll) when something actually needs quarantining.
     return lane_root(lane) / "_errors"
 
 
-def send_lane(endpoint: str | None = None) -> str:
+def _endpoint_cfg(endpoint: str | None) -> dict:
     ep = endpoint or this_endpoint()
-    return ENDPOINTS.get(ep, ENDPOINTS["claude@laptop-a"])["sends_on"]
+    try:
+        return ENDPOINTS[ep]
+    except KeyError:
+        raise ValueError(
+            f"Unbekannter Endpoint {ep!r}. Erlaubt: {', '.join(ENDPOINTS)}"
+        ) from None
+
+
+def send_lane(endpoint: str | None = None) -> str:
+    return _endpoint_cfg(endpoint)["sends_on"]
 
 
 def receive_lanes(endpoint: str | None = None) -> list[str]:
-    ep = endpoint or this_endpoint()
-    return list(ENDPOINTS.get(ep, ENDPOINTS["claude@laptop-a"])["receives_on"])
+    return list(_endpoint_cfg(endpoint)["receives_on"])
 
 
 # --- Legacy helpers (default lane) — keep Stage-0/1 tests green --------------
