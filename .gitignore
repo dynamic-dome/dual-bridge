@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Agentic-OS session memory (per-machine state, never shared)
+.agent-memory/
+scripts/.agent-memory/
+
+# Real secrets — only the .template is tracked
+.env
+.env.*
+!.env*.template
+
+# Codex working clones (Stage 1 workroot, per-machine)
+dual-bridge-work/
+*.codex-answer-*.txt
+
+# Local poller lock
+*.lock
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
