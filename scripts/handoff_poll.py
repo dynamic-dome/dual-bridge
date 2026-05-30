@@ -143,6 +143,22 @@ def _archive_claimed(claimed_path: bc.Path, fm: dict, body: str) -> bool:
         return False
 
 
+def _quarantine_claimed(claimed_path: bc.Path) -> bool:
+    """Move a malformed/hostile stranded claim into _errors/. The destination
+    name is derived from the (glob-guaranteed safe) source filename, never from
+    the untrusted frontmatter task_id. Never raises."""
+    if not claimed_path.exists():
+        return True
+    bc.errors_dir().mkdir(parents=True, exist_ok=True)
+    dest = bc.errors_dir() / claimed_path.name
+    try:
+        claimed_path.replace(dest)
+        return True
+    except OSError as exc:
+        print(f"[B] Quarantäne fehlgeschlagen für {claimed_path.name}: {exc} — Retry nächster Pass.")
+        return False
+
+
 def _requeue_claimed(claimed_path: bc.Path, fm: dict, body: str, task_id: str) -> bool:
     """P0 recovery: a claim that never produced a result is put back as an open
     task so it is not lost. Resets status to open, clears the claim stamps, and
@@ -238,6 +254,13 @@ def poll_once() -> int:
             continue
         fm, body = bc.parse_frontmatter(bc.read_text_utf8(stranded))
         task_id = fm.get("task_id", bc._task_id_from_name(stranded.name))
+        # Security: the recovery path also feeds task_id into result/branch names.
+        # The process_one guard does not cover stranded claims, so validate here
+        # too — a corrupt/hostile .claimed-* gets quarantined, never honoured.
+        if not bc.is_valid_task_id(task_id):
+            if _quarantine_claimed(stranded):
+                print(f"[B] Stranded-Claim {stranded.name} mit ungültiger task_id {task_id!r} → _errors/.")
+            continue
         has_result = (bc.inbox_dir() / f"result-{task_id}.md").exists()
         if fm.get("status") in ("done", "error") and has_result:
             if _archive_claimed(stranded, fm, body):

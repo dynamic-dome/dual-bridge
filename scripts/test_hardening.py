@@ -187,6 +187,38 @@ def test_poll_skips_task_with_bad_id() -> None:
     print("  poll OK — Task mit Injection-task_id übersprungen, kein Traversal-Artefakt")
 
 
+def test_recovery_validates_task_id() -> None:
+    """task_id-Injection via the stranded-claim recovery path (Codex verifier
+    finding). poll_once reads task_id from a .claimed-*'s frontmatter and uses it
+    for inbox/result-<id>.md and _requeue_claimed — the process_one guard does NOT
+    cover this path. A corrupt/hostile .claimed-* with a traversal task_id must be
+    quarantined, not honoured."""
+    import importlib
+    import bridge_common as bc
+    importlib.reload(bc)
+    import handoff_poll as hp
+    importlib.reload(hp)
+    bc.ensure_dirs()
+
+    # Filename is safe; the DANGEROUS id lives in the stranded claim's frontmatter.
+    fm = {
+        "created": bc.now_iso(), "agent": "laptop-a", "target_agent": "laptop-b",
+        "purpose": "handoff", "status": "open", "task_id": "../../evil",
+        "kind": "echo", "claimed_by": "laptop-b-worker@X", "claimed_at": bc.now_iso(),
+    }
+    safe_name_id = bc.make_task_id()
+    stranded = bc.outbox_dir() / f"task-{safe_name_id}.claimed-X-12345678.md"
+    bc.write_text_utf8(stranded, bc.build_document(fm, "## Auftrag\nx\n"))
+
+    hp.poll_once()
+
+    # No traversal artifact anywhere under the bridge root, and no requeued/result
+    # file built from the evil id.
+    assert not list(bc.bridge_root().glob("**/evil*")), "Traversal-Artefakt über Recovery-Pfad entstanden"
+    assert not (bc.outbox_dir() / "task-../../evil.md").exists()
+    print("  recovery OK — stranded claim mit Injection-task_id quarantäniert, kein Traversal")
+
+
 def test_sibling_surrender_leaves_no_orphan() -> None:
     """Sibling-Surrender bug (bridge_common.py:222-230): when claim_task loses the
     race (a sibling .claimed-* for the same task_id already exists), it must NOT
@@ -267,6 +299,7 @@ def main() -> int:
         test_sibling_surrender_leaves_no_orphan,
         test_task_id_validation_rejects_injection,
         test_poll_skips_task_with_bad_id,
+        test_recovery_validates_task_id,
         test_f1_double_claim_one_result,
     ]
     failed = 0

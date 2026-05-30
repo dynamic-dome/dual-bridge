@@ -55,6 +55,12 @@ def processed_dir() -> Path:
     return bridge_root() / "_processed"
 
 
+def errors_dir() -> Path:
+    """Quarantine for malformed/hostile task files (invalid task_id, corrupt
+    frontmatter). Kept separate from _processed/ so it is visibly not-normal."""
+    return bridge_root() / "_errors"
+
+
 def ensure_dirs() -> None:
     """Create the three bridge subdirs if missing (idempotent)."""
     for d in (outbox_dir(), inbox_dir(), processed_dir()):
