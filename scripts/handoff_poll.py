@@ -41,6 +41,12 @@ def process_one(task_path: bc.Path) -> bool:
         return False  # already claimed/done by someone else
 
     task_id = fm.get("task_id", task_path.stem.replace("task-", ""))
+    # Security: the task_id reaches a result filename and a git branch name.
+    # Reject anything that is not a well-formed make_task_id() to close
+    # path-traversal / branch-injection via a hostile/corrupt task file.
+    if not bc.is_valid_task_id(task_id):
+        print(f"[B] Task {task_path.name} hat ungültige task_id {task_id!r} — übersprungen.")
+        return False
     claimed_path = bc.claim_task(task_path, bc.DEVICE)
     if claimed_path is None:
         print(f"[B] Konnte {task_path.name} nicht claimen (Race/Lock) — übersprungen.")
@@ -137,6 +143,31 @@ def _archive_claimed(claimed_path: bc.Path, fm: dict, body: str) -> bool:
         return False
 
 
+def _requeue_claimed(claimed_path: bc.Path, fm: dict, body: str, task_id: str) -> bool:
+    """P0 recovery: a claim that never produced a result is put back as an open
+    task so it is not lost. Resets status to open, clears the claim stamps, and
+    renames back to task-<id>.md. Uses an exclusive write so we never clobber a
+    fresh open task that may already carry this id. Returns True on requeue."""
+    if not claimed_path.exists():
+        return False
+    target = bc.outbox_dir() / f"task-{task_id}.md"
+    if target.exists():
+        # An open task with this id already exists -> our stranded claim is a
+        # duplicate; drop it into _processed/ rather than losing or doubling it.
+        return _archive_claimed(claimed_path, fm, body)
+    fm = dict(fm)
+    fm["status"] = "open"
+    fm["claimed_by"] = ""
+    fm["claimed_at"] = ""
+    if not bc.write_text_exclusive(target, bc.build_document(fm, body)):
+        return False  # lost a race to another writer; leave the claim for next pass
+    try:
+        claimed_path.unlink()
+    except OSError:
+        pass  # best-effort; the requeued open task is already in place
+    return True
+
+
 def _extract_section(body: str, header: str) -> str | None:
     """Return the text under a '## Header' until the next '## ' or EOF."""
     lines = body.splitlines()
@@ -195,15 +226,25 @@ def poll_once() -> int:
     bc.ensure_dirs()
     count = 0
 
-    # F4: first, re-archive any stranded .claimed-* tasks from a prior pass
-    # whose move into _processed/ had failed. Their result already exists; they
-    # just need to leave the outbox. We do NOT re-process them.
+    # F4 + P0: recover stranded .claimed-* tasks from a prior pass. Two cases:
+    #  (a) DONE/ERROR with a result already in inbox/ -> just archive (the move
+    #      into _processed/ had failed; F4). Safe, no work lost.
+    #  (b) OPEN (or done/error but NO result) -> the poller crashed AFTER the
+    #      claim but BEFORE writing the result. Blind-archiving here loses the
+    #      task forever (P0). Requeue it instead: rename back to task-<id>.md
+    #      with status:open so the next pass re-processes it.
     for stranded in sorted(bc.outbox_dir().glob("task-*.claimed-*.md")):
         if _is_conflict_copy(stranded.name):
             continue
         fm, body = bc.parse_frontmatter(bc.read_text_utf8(stranded))
-        if _archive_claimed(stranded, fm, body):
-            print(f"[B] Nachgeholt archiviert: {stranded.name}")
+        task_id = fm.get("task_id", bc._task_id_from_name(stranded.name))
+        has_result = (bc.inbox_dir() / f"result-{task_id}.md").exists()
+        if fm.get("status") in ("done", "error") and has_result:
+            if _archive_claimed(stranded, fm, body):
+                print(f"[B] Nachgeholt archiviert: {stranded.name}")
+        else:
+            if _requeue_claimed(stranded, fm, body, task_id):
+                print(f"[B] P0-Recovery: {stranded.name} ohne Result → requeued (status:open).")
 
     # Fresh open tasks. Exclude already-claimed names (the glob above handled them).
     for task_path in sorted(bc.outbox_dir().glob("task-*.md")):

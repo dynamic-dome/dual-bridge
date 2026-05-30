@@ -80,6 +80,150 @@ def test_f4_stranded_claim_gets_archived() -> None:
     print("  F4 OK — liegengebliebener .claimed-Task nachgeholt archiviert, nicht reprozessiert")
 
 
+def test_p0_open_claim_without_result_is_not_lost() -> None:
+    """P0: a .claimed-* task that crashed AFTER claim but BEFORE its result was
+    written (status:open, no inbox/result-*.md) must NOT be silently archived
+    into _processed/. It has to be requeued (back to task-<id>.md, status:open)
+    so the next pass re-processes it. The old code archived it blindly -> loss."""
+    import importlib
+    import bridge_common as bc
+    importlib.reload(bc)
+    import handoff_poll as hp
+    importlib.reload(hp)
+    bc.ensure_dirs()
+
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "agent": "laptop-a", "target_agent": "laptop-b",
+        "purpose": "handoff", "status": "open", "task_id": task_id,
+        "kind": "echo", "claimed_by": "laptop-b-worker@TESTDEV",
+        "claimed_at": bc.now_iso(),
+    }
+    # A stranded claim with status:open and NO result -> the crash-before-result case.
+    stranded = bc.outbox_dir() / f"task-{task_id}.claimed-TESTDEV-deadbeef.md"
+    bc.write_text_utf8(stranded, bc.build_document(fm, "## Auftrag\nbearbeite mich\n"))
+
+    hp.poll_once()
+
+    # The crashed claim's exact filename must NOT end up in _processed/ — that
+    # would be the silent loss (archived without ever being answered).
+    assert not (bc.processed_dir() / stranded.name).exists(), \
+        "P0: open claim ohne Result wurde fälschlich nach _processed/ archiviert (Taskverlust!)"
+
+    # The task must survive in one of the legitimate forms: either requeued as an
+    # open task waiting for the next pass, OR already re-processed within the same
+    # pass (a result now exists). What must never happen: gone with no trace.
+    requeued = bc.outbox_dir() / f"task-{task_id}.md"
+    result = bc.inbox_dir() / f"result-{task_id}.md"
+    leftover_claim = list(bc.outbox_dir().glob(f"task-{task_id}.claimed-*.md"))
+    assert requeued.exists() or result.exists() or leftover_claim, \
+        "P0: open claim ohne Result ist spurlos verschwunden"
+    if requeued.exists() and not result.exists():
+        rfm, _ = bc.parse_frontmatter(bc.read_text_utf8(requeued))
+        assert rfm.get("status") == "open", \
+            f"requeued task muss status:open haben, war {rfm.get('status')!r}"
+    print("  P0 OK — open claim ohne Result überlebt (requeued bzw. nachverarbeitet, nicht verloren)")
+
+
+def test_task_id_validation_rejects_injection() -> None:
+    """task_id flows unchecked into result filenames (handoff_poll.py:108) and
+    git branch names (codex_adapter.py:166). A task_id with '../' or git/branch
+    metacharacters is a path-traversal / branch-injection vector — the trust
+    boundary is the shared Drive folder, not the laptop. is_valid_task_id must
+    accept legitimate make_task_id() output and reject anything else."""
+    import importlib
+    import bridge_common as bc
+    importlib.reload(bc)
+
+    # Real ids must pass.
+    for _ in range(20):
+        tid = bc.make_task_id()
+        assert bc.is_valid_task_id(tid), f"echte task_id fälschlich abgelehnt: {tid!r}"
+
+    # Injection / traversal attempts must be rejected.
+    bad = [
+        "../../etc/passwd",
+        "..\\..\\windows",
+        "a/b",
+        "a b",                 # space -> separate git arg
+        "--force",             # git flag injection
+        "x;rm -rf /",
+        "T1$(whoami)",
+        "T1\nmalice",
+        "",
+        "x" * 200,             # absurdly long
+        "task.claimed-evil",   # would collide with the claim marker
+    ]
+    for tid in bad:
+        assert not bc.is_valid_task_id(tid), f"bösartige task_id fälschlich akzeptiert: {tid!r}"
+    print("  task_id OK — echte IDs akzeptiert, Injection/Traversal abgelehnt")
+
+
+def test_poll_skips_task_with_bad_id() -> None:
+    """A task whose frontmatter carries an invalid task_id must not be processed
+    (no result file written under a traversal path, no codex/branch call)."""
+    import importlib
+    import bridge_common as bc
+    importlib.reload(bc)
+    import handoff_poll as hp
+    importlib.reload(hp)
+    bc.ensure_dirs()
+
+    # Filename is safe; the DANGEROUS id lives in the frontmatter.
+    safe_name_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "agent": "laptop-a", "target_agent": "laptop-b",
+        "purpose": "handoff", "status": "open", "task_id": "../evil",
+        "kind": "echo", "claimed_by": "", "claimed_at": "",
+    }
+    task = bc.outbox_dir() / f"task-{safe_name_id}.md"
+    bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nx\n"))
+
+    produced = hp.process_one(task)
+    assert produced is False, "Task mit ungültiger task_id darf nicht verarbeitet werden"
+    # No result anywhere outside the inbox (traversal) and none for the evil id.
+    assert not (bc.inbox_dir() / "result-../evil.md").exists()
+    assert not list(bc.bridge_root().glob("**/evil*")), "Traversal-Artefakt entstanden"
+    print("  poll OK — Task mit Injection-task_id übersprungen, kein Traversal-Artefakt")
+
+
+def test_sibling_surrender_leaves_no_orphan() -> None:
+    """Sibling-Surrender bug (bridge_common.py:222-230): when claim_task loses the
+    race (a sibling .claimed-* for the same task_id already exists), it must NOT
+    leave its own .claimed-* file orphaned in the outbox. The loser cleans up its
+    own claim; the winner's claim stands. The old code did `pass` -> orphan left."""
+    import importlib
+    import bridge_common as bc
+    importlib.reload(bc)
+    bc.ensure_dirs()
+
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "agent": "laptop-a", "target_agent": "laptop-b",
+        "purpose": "handoff", "status": "open", "task_id": task_id,
+        "kind": "echo", "claimed_by": "", "claimed_at": "",
+    }
+    task = bc.outbox_dir() / f"task-{task_id}.md"
+    bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nx\n"))
+
+    # Simulate the winner: a pre-existing sibling claim by another device.
+    winner = bc.outbox_dir() / f"task-{task_id}.claimed-OTHERDEV-11112222.md"
+    bc.write_text_utf8(winner, bc.build_document(fm, "## Auftrag\nx\n"))
+
+    # We try to claim and lose the sibling check.
+    result = bc.claim_task(task, "TESTDEV")
+    assert result is None, "claim_task muss bei vorhandenem Sibling None liefern"
+
+    # Our own claim must not be left orphaned in the outbox.
+    our_orphans = [
+        p for p in bc.outbox_dir().glob(f"task-{task_id}.claimed-TESTDEV-*.md")
+    ]
+    assert not our_orphans, f"Sibling-Surrender hinterließ Waise(n): {[p.name for p in our_orphans]}"
+    # The winner's claim is untouched.
+    assert winner.exists(), "Winner-Claim darf nicht angetastet werden"
+    print("  Sibling OK — Verlierer räumt eigene Waise weg, Winner-Claim bleibt")
+
+
 def test_f1_double_claim_one_result() -> None:
     """F1: if a result already exists, process_one bails (exclusive) and the
     task is archived rather than producing a duplicate result."""
@@ -119,6 +263,10 @@ def main() -> int:
         test_f2_exclusive_write,
         test_f3_atomic_write,
         test_f4_stranded_claim_gets_archived,
+        test_p0_open_claim_without_result_is_not_lost,
+        test_sibling_surrender_leaves_no_orphan,
+        test_task_id_validation_rejects_injection,
+        test_poll_skips_task_with_bad_id,
         test_f1_double_claim_one_result,
     ]
     failed = 0

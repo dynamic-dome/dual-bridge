@@ -69,6 +69,27 @@ def now_iso() -> str:
 
 _id_counter = _itertools.count()
 
+import re as _re
+
+# A legitimate make_task_id() is YYYYMMDD-HHMMSS-<micros>-<seq>-<rand>:
+#   20260531-000157-681311-0-1f1f  (date-time-micros-seqhex-randhex)
+# Only digits, lowercase hex and hyphens occur. We validate any id read from a
+# task file against this exact shape before it reaches a result filename
+# (inbox/result-<id>.md) or a git branch name (bridge/task-<id>) — the shared
+# Drive folder is an untrusted boundary, so an id with '../', spaces, ';' or
+# git-flag prefixes ('--force') must never be honoured.
+_TASK_ID_RE = _re.compile(
+    r"^[0-9]{8}-[0-9]{6}-[0-9]{6}-[0-9a-f]+-[0-9a-f]{4}$"
+)
+
+
+def is_valid_task_id(task_id: str) -> bool:
+    """True only for ids in the exact make_task_id() shape. Rejects empty,
+    over-long, traversal, and metacharacter-bearing ids."""
+    if not task_id or len(task_id) > 64:
+        return False
+    return bool(_TASK_ID_RE.match(task_id))
+
 
 def make_task_id() -> str:
     """A sortable, collision-free id: YYYYMMDD-HHMMSS-<micros>-<seq>-<rand>.
@@ -220,15 +241,29 @@ def claim_task(task_path: Path, device: str) -> Path | None:
         if p != claimed_path
     ]
     if siblings:
-        # Another claim exists → we lost. Surrender ours back so the winner's
-        # result stands; do NOT process. (Visible, not silent.)
-        try:
-            # Rename back toward open only if the original is gone; otherwise
-            # just leave our claim — the winner already produced a result.
-            pass
-        finally:
-            return None
+        # Another claim exists → we lost. Surrender ours so the winner's claim
+        # stands and we leave NO orphan behind. Prefer putting the task back to
+        # an open task-<id>.md (so it survives even if the winner later fails);
+        # if an open task already exists, just drop our duplicate claim.
+        _surrender_claim(claimed_path, task_path)
+        return None
     return claimed_path
+
+
+def _surrender_claim(claimed_path: Path, original_path: Path) -> None:
+    """Loser cleanup for claim_task: rename our claim back to the open task name
+    if that slot is free, else delete our claim. Never raises (best-effort)."""
+    try:
+        if not original_path.exists():
+            os.rename(claimed_path, original_path)
+            return
+    except OSError:
+        pass  # fall through to unlink
+    try:
+        if claimed_path.exists():
+            claimed_path.unlink()
+    except OSError:
+        pass
 
 
 DEVICE = os.environ.get("DUAL_BRIDGE_DEVICE", os.environ.get("COMPUTERNAME", "unknown"))

@@ -171,16 +171,21 @@ def test_task_happy_path_writes_and_pushes() -> None:
 
 
 def test_task_codex_not_found() -> None:
+    """Deterministic: point codex_bin at a guaranteed-absent path instead of
+    relying on PATH. The old version fell back to shutil.which('codex') and, on
+    a machine with codex installed, actually invoked the real CLI against the
+    seed repo (slow, non-deterministic, real git/net) AND silently skipped the
+    not-found assertion — masking the error path entirely (Codex review finding)."""
     import codex_adapter as ca
     tmp = Path(tempfile.mkdtemp(prefix="task-nf-"))
     remote, work_parent = _init_local_repo(tmp)
+    missing = str(tmp / "no-such-codex-binary.exe")
+    assert not Path(missing).exists()
     r = ca.run_codex_task("x", str(remote), "main", "T9", work_parent,
-                          codex_bin=None)  # rely on PATH; ensure codex absent
-    # If a real codex happens to be installed this assertion is skipped.
-    if r.status == "error" and r.error_text and "codex" in r.error_text.lower():
-        print("  task OK -- codex-not-found -> error")
-    else:
-        print("  task SKIP -- a real codex is on PATH; not-found path not exercised")
+                          codex_bin=missing)
+    assert r.status == "error" and r.error_text and "codex" in r.error_text.lower(), \
+        f"expected codex-not-found error, got {r.status}/{r.error_text}"
+    print("  task OK -- codex-not-found -> error (deterministic, no real codex)")
 
 
 def test_task_repo_unreachable() -> None:

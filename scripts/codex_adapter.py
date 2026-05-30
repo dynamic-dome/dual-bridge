@@ -211,6 +211,12 @@ def run_codex_task(
         return CodexResult(status="error",
                            error_text=f"codex timeout nach {timeout}s",
                            stderr_excerpt=_tail(getattr(exc, "stderr", None)))
+    except (FileNotFoundError, OSError) as exc:
+        # An explicit codex_bin that does not exist (or is not executable) must
+        # not raise out of here — the spec guarantees a CodexResult on every path.
+        _safe_unlink(answer_file)
+        return CodexResult(status="error",
+                           error_text=f"codex nicht ausführbar ({codex_exe}): {exc}")
     if proc.returncode != 0:
         _safe_unlink(answer_file)
         return CodexResult(status="error",
