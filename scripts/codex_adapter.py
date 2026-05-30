@@ -275,13 +275,15 @@ def _safe_unlink(path: Path) -> None:
 
 def _codex_runner(auftrag: str, fm: dict, workroot):
     """Adapt run_codex_task to the (auftrag, fm, workroot) runner signature."""
-    from pathlib import Path as _P
-    wr = _P(workroot) if workroot is not None else _P.home() / "dual-bridge-work"
+    task_id = fm.get("task_id")
+    if not task_id:
+        return RunnerResult(status="error", error_text="task ohne task_id")
+    wr = Path(workroot) if workroot is not None else Path.home() / "dual-bridge-work"
     return run_codex_task(
         auftrag=auftrag,
         repo=fm.get("repo", ""),
         base_branch=fm.get("base_branch", "main"),
-        task_id=fm["task_id"],
+        task_id=task_id,
         workroot=wr,
         codex_bin=os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None,
         timeout=int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600")),
