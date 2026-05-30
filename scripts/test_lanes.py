@@ -40,9 +40,36 @@ def test_default_lane_backcompat() -> None:
     print("  lane OK — legacy outbox_dir/inbox_dir map to the default lane")
 
 
+def test_runner_result_to_markdown() -> None:
+    import runners
+    importlib.reload(runners)
+    r = runners.RunnerResult(status="done", antwort="hallo welt")
+    md = r.to_markdown(task_id="T1", claimed_by="x", claimed_at="now")
+    assert "## Quelle" in md and "hallo welt" in md
+    err = runners.RunnerResult(status="error", error_text="kaputt")
+    assert "## FEHLER" in err.to_markdown(task_id="T2", claimed_by="x", claimed_at="now")
+    print("  runner OK — RunnerResult.to_markdown renders done + error")
+
+
+def test_run_echo() -> None:
+    import runners
+    importlib.reload(runners)
+    r = runners.run_echo(auftrag="spiegel mich", fm={"task_id": "T1"}, workroot=None)
+    assert r.status == "done" and "spiegel mich" in r.antwort
+    print("  runner OK — run_echo returns done with the auftrag echoed")
+
+
+def test_registry_has_echo() -> None:
+    import runners
+    importlib.reload(runners)
+    assert "echo" in runners.RUNNERS and callable(runners.RUNNERS["echo"])
+    print("  runner OK — RUNNERS registry contains echo")
+
+
 def main() -> int:
     print("=== Stage-2a Lane-Tests ===")
-    tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat]
+    tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat,
+             test_runner_result_to_markdown, test_run_echo, test_registry_has_echo]
     failed = 0
     for t in tests:
         try:
