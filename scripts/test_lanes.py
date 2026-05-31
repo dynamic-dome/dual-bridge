@@ -86,11 +86,65 @@ def test_codex_registered_and_allowlist() -> None:
     print("  codex OK — registered + repo-allowlist rejects non-listed repo before clone")
 
 
+def test_poll_dispatches_on_adapter_echo() -> None:
+    _fresh_bridge("claude@laptop-a")  # A receives on B-to-A
+    import bridge_common as bc; importlib.reload(bc)
+    import runners; importlib.reload(runners)
+    import handoff_poll as hp; importlib.reload(hp)
+    bc.ensure_dirs()
+    task_id = bc.make_task_id()
+    fm = {"created": bc.now_iso(), "from": "codex@laptop-b", "to": "claude@laptop-a",
+          "status": "open", "task_id": task_id, "kind": "research", "adapter": "echo",
+          "claimed_by": "", "claimed_at": ""}
+    task = bc.lane_outbox("B-to-A") / f"task-{task_id}.md"
+    bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nspiegel\n"))
+    assert hp.process_one(task, lane="B-to-A") is True
+    rfm, rbody = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{task_id}.md"))
+    assert rfm["status"] == "done" and "spiegel" in rbody
+    print("  poll OK — adapter:echo dispatched via registry, result in B-to-A inbox")
+
+
+def test_poll_to_filter_skips_foreign() -> None:
+    _fresh_bridge("claude@laptop-a")
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_poll as hp; importlib.reload(hp)
+    bc.ensure_dirs()
+    task_id = bc.make_task_id()
+    fm = {"created": bc.now_iso(), "from": "x@y", "to": "codex@laptop-b",
+          "status": "open", "task_id": task_id, "kind": "research", "adapter": "echo",
+          "claimed_by": "", "claimed_at": ""}
+    task = bc.lane_outbox("B-to-A") / f"task-{task_id}.md"
+    bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nx\n"))
+    assert hp.process_one(task, lane="B-to-A") is False, "fremder to muss übersprungen werden"
+    print("  poll OK — to-filter skips task addressed to another endpoint")
+
+
+def test_poll_unknown_adapter_errors() -> None:
+    _fresh_bridge("claude@laptop-a")
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_poll as hp; importlib.reload(hp)
+    bc.ensure_dirs()
+    task_id = bc.make_task_id()
+    fm = {"created": bc.now_iso(), "from": "codex@laptop-b", "to": "claude@laptop-a",
+          "status": "open", "task_id": task_id, "kind": "research", "adapter": "bogus",
+          "claimed_by": "", "claimed_at": ""}
+    task = bc.lane_outbox("B-to-A") / f"task-{task_id}.md"
+    bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nx\n"))
+    hp.process_one(task, lane="B-to-A")
+    rfm, _ = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{task_id}.md"))
+    assert rfm["status"] == "error", "unbekannter adapter muss status:error liefern"
+    print("  poll OK — unknown adapter -> status:error, no crash")
+
+
 def main() -> int:
     print("=== Stage-2a Lane-Tests ===")
     tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat,
              test_runner_result_to_markdown, test_run_echo, test_registry_has_echo,
-             test_codex_registered_and_allowlist]
+             test_codex_registered_and_allowlist,
+             test_poll_dispatches_on_adapter_echo, test_poll_to_filter_skips_foreign,
+             test_poll_unknown_adapter_errors]
     failed = 0
     for t in tests:
         try:
