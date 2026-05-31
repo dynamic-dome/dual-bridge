@@ -77,6 +77,36 @@ def test_run_claude_not_found() -> None:
     print("  claude OK — missing binary -> status:error (no raise)")
 
 
+def test_run_claude_nonzero_exit_with_valid_answer_is_done() -> None:
+    """Live Phase-6 finding (P007): with --settings disableAllHooks the reviewer
+    PRODUCES a full valid result (12 KB JSON, verdict included) but STILL exits
+    1. The exit code lies; the answer is real. The adapter must NOT discard a
+    parseable answer just because returncode != 0 — parse first, judge by the
+    answer, surface the nonzero exit as a note (not a hard error)."""
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-x1-"))
+    fake = _write_fake_claude(tmp, answer="sieht ok aus\nVERDICT: accepted", exit_code=1)
+    r = ca.run_claude(auftrag="review", fm={"task_id": "T1"}, workroot=tmp,
+                      claude_bin=fake)
+    assert r.status == "done", f"expected done despite exit 1, got {r.status}: {r.error_text}"
+    assert "VERDICT: accepted" in r.antwort
+    print("  claude OK — nonzero exit + valid answer -> done (P007: exit code lies)")
+
+
+def test_run_claude_nonzero_exit_without_answer_is_error() -> None:
+    """The flip side: a nonzero exit AND no parseable answer is a genuine error."""
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-x1e-"))
+    fake = _write_fake_claude(tmp, answer="", exit_code=1)  # no stdout, exit 1
+    r = ca.run_claude(auftrag="review", fm={"task_id": "T1"}, workroot=tmp,
+                      claude_bin=fake)
+    assert r.status == "error", f"expected error, got {r.status}"
+    assert "exit 1" in (r.error_text or "")
+    print("  claude OK — nonzero exit + empty answer -> error")
+
+
 def _write_argdump_claude(tmp: Path) -> tuple[str, Path]:
     """A fake claude that dumps its argv to a file, then emits a valid result.
     Lets us assert which flags the adapter passes (hook-disable hardening)."""
@@ -130,7 +160,9 @@ def main() -> int:
     print("=== Stage-2a Claude-Adapter-Tests ===")
     tests = [test_parse_event_stream_with_hook_noise, test_parse_empty_is_empty,
              test_run_claude_happy, test_run_claude_not_found,
-             test_run_claude_disables_hooks]
+             test_run_claude_disables_hooks,
+             test_run_claude_nonzero_exit_with_valid_answer_is_done,
+             test_run_claude_nonzero_exit_without_answer_is_error]
     failed = 0
     for t in tests:
         try:

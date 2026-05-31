@@ -93,14 +93,24 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
     except (FileNotFoundError, OSError) as exc:
         return RunnerResult(status="error",
                             error_text=f"claude nicht ausführbar ({exe}): {exc}")
+    # P007 (verified live 2026-05-31): with --settings disableAllHooks the
+    # reviewer PRODUCES a full valid JSON result (verdict included) but STILL
+    # exits 1 on this Claude build. The exit code lies; the answer is real. So
+    # we PARSE FIRST and judge by the answer — a parseable answer means done,
+    # regardless of the exit code. A nonzero exit is surfaced only as a note,
+    # never discards real reviewer output.
+    antwort = parse_claude_output(proc.stdout)
+    if antwort:
+        note = None
+        if proc.returncode != 0:
+            note = f"claude exit {proc.returncode} (ignored: valid answer parsed)"
+        return RunnerResult(status="done", antwort=antwort, note=note)
+    # No usable answer: now the exit code matters.
     if proc.returncode != 0:
         return RunnerResult(status="error", error_text=f"claude exit {proc.returncode}",
                             stderr_excerpt=_tail(proc.stderr))
-    antwort = parse_claude_output(proc.stdout)
-    if not antwort:
-        return RunnerResult(status="error", error_text="claude: leere Antwort",
-                            stderr_excerpt=_tail(proc.stderr))
-    return RunnerResult(status="done", antwort=antwort)
+    return RunnerResult(status="error", error_text="claude: leere Antwort",
+                        stderr_excerpt=_tail(proc.stderr))
 
 
 def _tail(text: str | None, limit: int = 2000) -> str | None:
