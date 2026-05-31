@@ -1,122 +1,107 @@
-# diagnose-codex-sandbox-B.ps1
-# Self-diagnosing check for the codex sandbox on Laptop B (the WORKER).
-# Triggered by a live failure 2026-05-31: codex returned
-#   "windows sandbox: spawn setup refresh"
-# when run with `-s workspace-write` during an implement task.
+# diagnose-codex-sandbox-B.ps1  (v2 — robust gegen den npm .ps1-Wrapper)
+# Self-diagnosing check for the codex worker on Laptop B.
 #
-# Run ONCE on B. Prints KEY=VALUE lines so the orchestrator on A can read the
-# whole state from a single paste-back. Read-only-ish: it runs codex against a
-# THROWAWAY temp dir with a trivial prompt, writes nothing into the bridge or
-# any real repo.
+# Triggered by two live findings 2026-05-31:
+#   (1) codex returned "windows sandbox: spawn setup refresh" under
+#       -s workspace-write on the first real implement task, and
+#   (2) codex is installed as codex.ps1 (npm pwsh wrapper) — Python subprocess
+#       (the real adapter path) cannot launch a .ps1 directly (global rule 10.2).
 #
-# Usage (on B):
-#   powershell -ExecutionPolicy Bypass -File diagnose-codex-sandbox-B.ps1
+# This script does NOT use `cmd /c` against the .ps1 (that was the v1 bug that
+# dropped a stray codex.ps1 into the cwd). It inspects the npm bin dir, asks
+# Python what it would launch, and probes codex via the .cmd shim + stdin.
 #
-# Paste the full output back to A.
+# Run ONCE on B from the scripts/ dir:
+#   powershell -ExecutionPolicy Bypass -File .\diagnose-codex-sandbox-B.ps1
+# Then paste the full KEY=VALUE output back to A.
 
 $ErrorActionPreference = "Continue"
 function Emit($k, $v) { Write-Output "$k=$v" }
 
-Write-Output "=== DIAGNOSE-CODEX-SANDBOX (Laptop B / Worker) ==="
+Write-Output "=== DIAGNOSE-CODEX-SANDBOX v2 (Laptop B / Worker) ==="
 Write-Output ""
 
-# --- 1. codex binary + version --------------------------------------------
+# --- 1. which codex variants exist? (npm drops .ps1 + .cmd + extensionless) -
 $codexCmd = Get-Command codex -ErrorAction SilentlyContinue
-if (-not $codexCmd) {
-    Emit "CODEX_BIN" "MISSING (codex not on PATH)"
-    Emit "RESULT" "NOT-READY"
-    Write-Output "=== ENDE ==="
-    exit 1
+if (-not $codexCmd) { Emit "CODEX_ON_PATH" "MISSING"; Emit "RESULT" "NOT-READY"; exit 1 }
+Emit "CODEX_RESOLVED_BY_PATH" $codexCmd.Source
+$binDir = Split-Path $codexCmd.Source -Parent
+foreach ($ext in @(".cmd", ".ps1", ".exe", "")) {
+    $cand = Join-Path $binDir ("codex" + $ext)
+    $label = if ($ext -eq "") { "codex(noext)" } else { "codex$ext" }
+    if (Test-Path $cand) { Emit "VARIANT_$label" "EXISTS" } else { Emit "VARIANT_$label" "-" }
 }
-Emit "CODEX_BIN" "OK ($($codexCmd.Source))"
 $ver = (& codex --version 2>&1) -join " "
 Emit "CODEX_VERSION" $ver
 
-# --- 2. OS / build context (sandbox is OS-version sensitive) ---------------
+# --- 2. OS context ----------------------------------------------------------
 $os = (Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue)
 if ($os) { Emit "OS_BUILD" "$($os.Caption) build $($os.BuildNumber)" }
 Emit "WHOAMI" (whoami)
-# Admin? (codex windows sandbox can behave differently elevated)
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
-Emit "IS_ADMIN" $isAdmin
 
-# --- 3. throwaway workdir for the probes -----------------------------------
+# --- 3. THE KEY CHECK: what does Python subprocess resolve + can it launch? --
+# This is the real adapter path (codex_adapter.py: shutil.which + subprocess).
+$pycode = @'
+import shutil, subprocess, sys
+which = shutil.which("codex")
+print("PY_WHICH=" + (which or "NONE"))
+if not which:
+    sys.exit(0)
+print("PY_WHICH_EXT=" + (which.rsplit(".",1)[-1] if "." in which else "noext"))
+# Can subprocess actually start it? (.ps1 will raise; .cmd/.exe will run)
+try:
+    p = subprocess.run([which, "--version"], capture_output=True, text=True, timeout=30)
+    out = (p.stdout or p.stderr or "").strip().splitlines()[:1]
+    print("PY_SUBPROCESS_LAUNCH=OK (" + (out[0] if out else "no output") + ")")
+except Exception as e:
+    print("PY_SUBPROCESS_LAUNCH=FAIL (" + type(e).__name__ + ": " + str(e)[:80] + ")")
+'@
+$pyOut = ($pycode | python - 2>&1)
+$pyOut | ForEach-Object { Write-Output $_ }
+
+# --- 4. sandbox probe via the .CMD shim (NOT .ps1), prompt on stdin ---------
+# Use codex.cmd explicitly so we never hit the .ps1 (which Python can't launch
+# and which cmd-piping corrupts). Prompt piped on stdin like the fixed adapter.
+$codexCmdShim = Join-Path $binDir "codex.cmd"
 $work = Join-Path $env:TEMP ("codex-sbx-" + [Guid]::NewGuid().ToString("N").Substring(0,8))
 New-Item -ItemType Directory -Path $work -Force | Out-Null
-$ansFile = Join-Path $env:TEMP ("codex-ans-" + [Guid]::NewGuid().ToString("N").Substring(0,8) + ".txt")
-$prompt = "Reply with exactly the word PONG and change no files."
 
-function Probe-Sandbox($mode) {
-    # Runs codex exec in $mode against the throwaway workdir, prompt via stdin
-    # (matches the adapter fix). Returns a short status string.
-    if (Test-Path $ansFile) { Remove-Item $ansFile -Force -ErrorAction SilentlyContinue }
-    $stderrFile = Join-Path $env:TEMP ("codex-err-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
-    try {
-        $p = Start-Process -FilePath $codexCmd.Source `
-            -ArgumentList @("exec", "-C", $work, "-s", $mode, "-o", $ansFile, "-") `
-            -RedirectStandardInput "NUL" `
-            -RedirectStandardError $stderrFile `
-            -NoNewWindow -PassThru -Wait -ErrorAction Stop
-        # NOTE: stdin via NUL means no prompt -> codex may wait; so instead we
-        # feed the prompt through cmd piping below if this returns empty.
-        $code = $p.ExitCode
-    } catch {
-        return "EXC: $($_.Exception.Message)"
-    }
-    $err = ""
-    if (Test-Path $stderrFile) { $err = (Get-Content $stderrFile -Raw -ErrorAction SilentlyContinue) }
-    Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
-    if ($err -match "spawn setup refresh|sandbox") { return "SANDBOX-ERROR: $($err.Trim() -replace '\s+',' ')".Substring(0, [Math]::Min(160, "SANDBOX-ERROR: $err".Length)) }
-    if ($code -ne 0) { return "EXIT $code :: $($err.Trim() -replace '\s+',' ')".Substring(0, [Math]::Min(160, 80)) }
-    if (Test-Path $ansFile) {
-        $ans = (Get-Content $ansFile -Raw -ErrorAction SilentlyContinue).Trim()
-        return "OK (answer: $($ans.Substring(0,[Math]::Min(40,$ans.Length))))"
-    }
-    return "EMPTY (exit 0 but no answer file)"
-}
-
-# The probe above with NUL stdin won't deliver the prompt; use a cmd pipe so
-# the prompt reaches codex on stdin exactly like the adapter does.
-function Probe-SandboxPiped($mode) {
-    if (Test-Path $ansFile) { Remove-Item $ansFile -Force -ErrorAction SilentlyContinue }
-    $errFile = Join-Path $env:TEMP ("codex-err-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
-    $exe = $codexCmd.Source
-    # echo prompt | codex exec -C work -s <mode> -o ans -
-    $cmdline = "echo $prompt| `"$exe`" exec -C `"$work`" -s $mode -o `"$ansFile`" - 2> `"$errFile`""
-    & cmd /c $cmdline | Out-Null
+function Probe($mode) {
+    if (-not (Test-Path $codexCmdShim)) { return "SKIP (no codex.cmd shim)" }
+    $ans = Join-Path $env:TEMP ("ans-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
+    $err = Join-Path $env:TEMP ("err-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
+    # Pipe the prompt on stdin to the .cmd shim. & with a here-string via Write-Output.
+    "Reply with exactly PONG and change no files." |
+        & $codexCmdShim exec -C $work -s $mode -o $ans - 2> $err | Out-Null
     $code = $LASTEXITCODE
-    $err = ""
-    if (Test-Path $errFile) { $err = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue) }
-    Remove-Item $errFile -Force -ErrorAction SilentlyContinue
-    if ($err -match "spawn setup refresh") { return "SANDBOX-REFRESH-ERROR" }
-    if ($err -match "sandbox") { $t = ($err.Trim() -replace '\s+',' '); return "SANDBOX-ERROR: " + $t.Substring(0,[Math]::Min(120,$t.Length)) }
-    if (Test-Path $ansFile) {
-        $ans = (Get-Content $ansFile -Raw -ErrorAction SilentlyContinue).Trim()
-        if ($ans) { return "OK (answer: " + $ans.Substring(0,[Math]::Min(40,$ans.Length)) + ")" }
+    $etxt = if (Test-Path $err) { (Get-Content $err -Raw -ErrorAction SilentlyContinue) } else { "" }
+    Remove-Item $err -Force -ErrorAction SilentlyContinue
+    if ($etxt -match "spawn setup refresh") { Remove-Item $ans -Force -ErrorAction SilentlyContinue; return "SANDBOX-REFRESH-ERROR" }
+    if ($etxt -match "sandbox") { Remove-Item $ans -Force -ErrorAction SilentlyContinue; $t=($etxt.Trim() -replace '\s+',' '); return "SANDBOX-ERR: " + $t.Substring(0,[Math]::Min(110,$t.Length)) }
+    if (Test-Path $ans) {
+        $a = (Get-Content $ans -Raw -ErrorAction SilentlyContinue).Trim()
+        Remove-Item $ans -Force -ErrorAction SilentlyContinue
+        if ($a) { return "OK (" + $a.Substring(0,[Math]::Min(30,$a.Length)) + ")" }
     }
-    if ($code -ne 0) { $t = ($err.Trim() -replace '\s+',' '); return "EXIT $code :: " + $t.Substring(0,[Math]::Min(100,$t.Length)) }
-    return "EMPTY (exit 0, no answer)"
+    $t = ($etxt.Trim() -replace '\s+',' ')
+    return "EXIT $code :: " + $t.Substring(0,[Math]::Min(90,$t.Length))
 }
 
-# --- 4. probe the three sandbox modes --------------------------------------
 Write-Output ""
-Write-Output "--- Sandbox-Proben (trivialer PONG-Prompt, Wegwerf-Workdir) ---"
-Emit "PROBE_WORKSPACE_WRITE" (Probe-SandboxPiped "workspace-write")
-Emit "PROBE_READ_ONLY"       (Probe-SandboxPiped "read-only")
-Emit "PROBE_DANGER_FULL"     (Probe-SandboxPiped "danger-full-access")
+Write-Output "--- Sandbox-Proben via codex.cmd (PONG-Prompt, Wegwerf-Workdir) ---"
+Emit "PROBE_WORKSPACE_WRITE" (Probe "workspace-write")
+Emit "PROBE_READ_ONLY"       (Probe "read-only")
+Emit "PROBE_DANGER_FULL"     (Probe "danger-full-access")
 
-# --- 5. cleanup ------------------------------------------------------------
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item $ansFile -Force -ErrorAction SilentlyContinue
 
 Write-Output ""
 Write-Output "Deutung:"
-Write-Output "  - workspace-write SANDBOX-REFRESH-ERROR, read-only OK  -> Sandbox-Spawn-Bug nur"
-Write-Output "    im write-Modus (codex-CLI/Windows-Sandbox-Problem). Workaround pruefen:"
-Write-Output "    codex updaten (npm i -g @openai/codex@latest) ODER -s danger-full-access"
-Write-Output "    (nur auf Wegwerf-Repos, Threat-Model)."
-Write-Output "  - alle drei SANDBOX-ERROR -> codex-Sandbox grundsaetzlich kaputt auf B,"
-Write-Output "    codex-Neuinstallation/Update noetig."
-Write-Output "  - workspace-write OK -> Fehler war transient; Task einfach neu fahren."
+Write-Output "  - PY_WHICH endet auf .ps1 UND PY_SUBPROCESS_LAUNCH=FAIL -> ECHTE WURZEL:"
+Write-Output "    der Adapter erwischt den .ps1-Wrapper, den Python nicht starten kann."
+Write-Output "    Fix gehoert in den Adapter (codex.cmd bevorzugen). Kein Sandbox-Problem."
+Write-Output "  - PY_SUBPROCESS_LAUNCH=OK aber PROBE_WORKSPACE_WRITE=SANDBOX-REFRESH-ERROR:"
+Write-Output "    echtes codex-Sandbox-Problem im write-Modus -> codex updaten / danger-full."
+Write-Output "  - alle PROBE_* OK -> war transient, Task neu fahren."
 Write-Output ""
-Write-Output "=== ENDE DIAGNOSE ==="
+Write-Output "=== ENDE DIAGNOSE v2 ==="
