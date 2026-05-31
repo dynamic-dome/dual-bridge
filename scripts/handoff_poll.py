@@ -31,6 +31,28 @@ def _is_conflict_copy(name: str) -> bool:
     return "(" in name and ")" in name
 
 
+def _build_result_fm(fm: dict, result, task_id: str, adapter: str) -> dict:
+    """Assemble the result frontmatter from a RunnerResult. Reply goes back to
+    the original sender (fm['from']); branch/commit only if the runner set them."""
+    result_fm = {
+        "created": bc.now_iso(),
+        "agent": fm["claimed_by"],
+        "from": bc.this_endpoint(),
+        "to": fm.get("from", ""),
+        "purpose": "handoff",
+        "status": result.status,
+        "task_id": task_id,
+        "kind": fm.get("kind", "echo"),
+        "adapter": adapter,
+        "replies_to": f"task-{task_id}.md",
+    }
+    if result.branch:
+        result_fm["branch"] = result.branch
+    if result.commit:
+        result_fm["commit"] = result.commit
+    return result_fm
+
+
 def process_one(task_path: bc.Path, lane: str) -> bool:
     """Claim + route + run + publish a single task within `lane`. Returns True
     if a result was written."""
@@ -74,24 +96,7 @@ def process_one(task_path: bc.Path, lane: str) -> bool:
                                           error_text=f"{adapter} runner crash: {type(exc).__name__}: {exc}")
 
     fm["status"] = result.status
-    extra_fm = {}
-    if result.branch:
-        extra_fm["branch"] = result.branch
-    if result.commit:
-        extra_fm["commit"] = result.commit
-    result_fm = {
-        "created": bc.now_iso(),
-        "agent": fm["claimed_by"],
-        "from": bc.this_endpoint(),
-        "to": fm.get("from", ""),
-        "purpose": "handoff",
-        "status": result.status,
-        "task_id": task_id,
-        "kind": fm.get("kind", "echo"),
-        "adapter": adapter,
-        "replies_to": f"task-{task_id}.md",
-        **extra_fm,
-    }
+    result_fm = _build_result_fm(fm, result, task_id, adapter)
     result_body = result.to_markdown(task_id, fm["claimed_by"], fm["claimed_at"])
     result_path = bc.lane_inbox(lane) / f"result-{task_id}.md"
     # F1/F3: exclusive create — never silently overwrite an existing result.
