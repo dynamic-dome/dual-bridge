@@ -138,13 +138,28 @@ def test_poll_unknown_adapter_errors() -> None:
     print("  poll OK — unknown adapter -> status:error, no crash")
 
 
+def test_writer_uses_send_lane_and_adapter() -> None:
+    _fresh_bridge("codex@laptop-b")  # B sends on B-to-A
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_write as hw; importlib.reload(hw)
+    rc = hw.main(["bau das feature", "--kind", "implement", "--adapter", "claude"])
+    assert rc == 0
+    tasks = list(bc.lane_outbox("B-to-A").glob("task-*.md"))
+    assert len(tasks) == 1, f"task not in B-to-A send lane: {tasks}"
+    fm, _ = bc.parse_frontmatter(bc.read_text_utf8(tasks[0]))
+    assert fm["adapter"] == "claude"
+    assert fm["from"] == "codex@laptop-b" and fm["to"] == "claude@laptop-a"
+    print("  write OK — task in send-lane outbox with adapter + from/to set")
+
+
 def main() -> int:
     print("=== Stage-2a Lane-Tests ===")
     tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat,
              test_runner_result_to_markdown, test_run_echo, test_registry_has_echo,
              test_codex_registered_and_allowlist,
              test_poll_dispatches_on_adapter_echo, test_poll_to_filter_skips_foreign,
-             test_poll_unknown_adapter_errors]
+             test_poll_unknown_adapter_errors,
+             test_writer_uses_send_lane_and_adapter]
     failed = 0
     for t in tests:
         try:

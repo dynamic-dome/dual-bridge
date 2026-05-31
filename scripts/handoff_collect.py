@@ -46,7 +46,8 @@ def show_result(path: bc.Path) -> None:
 
 def collect_once(peek: bool) -> int:
     bc.ensure_dirs()
-    results = sorted(bc.inbox_dir().glob("result-*.md"))
+    lane = bc.send_lane()
+    results = sorted(bc.lane_inbox(lane).glob("result-*.md"))
     n = 0
     for path in results:
         if _is_conflict_copy(path.name):
@@ -55,7 +56,7 @@ def collect_once(peek: bool) -> int:
         show_result(path)
         n += 1
         if not peek:
-            dest = bc.processed_dir() / path.name
+            dest = bc.lane_processed(lane) / path.name
             try:
                 path.replace(dest)
             except OSError:
