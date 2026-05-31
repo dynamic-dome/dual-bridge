@@ -209,7 +209,10 @@ def test_task_prompt_via_stdin_not_arg() -> None:
     assert inv["stdin"] == long_prompt, "prompt did NOT arrive intact on stdin"
     assert long_prompt not in inv["argv"], "prompt must NOT be a positional arg"
     assert "-" in inv["argv"], "positional '-' (read-stdin) marker missing from argv"
-    print("  task OK -- prompt piped via stdin, '-' arg, not mangled as CLI arg")
+    # The freshly cloned+branched workdir is a git repo by construction; codex
+    # 0.135 otherwise refuses it as "not a trusted directory" (observed live B).
+    assert "--skip-git-repo-check" in inv["argv"], "skip-git-repo-check flag missing"
+    print("  task OK -- prompt piped via stdin, '-' arg, skip-git-repo-check set")
 
 
 def test_task_codex_not_found() -> None:

@@ -200,10 +200,16 @@ def run_codex_task(
     #    The -o answer file lives OUTSIDE the workdir, so it can never be picked
     #    up by `git status` / committed (cleaner than relying on a post-unlink).
     answer_file = Path(workroot) / f".codex-answer-{task_id}.txt"
+    # --skip-git-repo-check: we just cloned the repo and checked out a fresh
+    # bridge/task-<id> branch ourselves, so the workdir IS a git repo by
+    # construction. codex 0.135 otherwise refuses with "Not inside a trusted
+    # directory and --skip-git-repo-check was not specified." on a freshly
+    # cloned/branched tree it doesn't recognise as trusted (observed 2026-05-31).
     cmd = [
         codex_exe, "exec",
         "-C", str(workdir),
         "-s", "workspace-write",
+        "--skip-git-repo-check",
         "-o", str(answer_file),
         "-",
     ]
