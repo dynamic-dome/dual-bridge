@@ -152,6 +152,35 @@ def test_writer_uses_send_lane_and_adapter() -> None:
     print("  write OK — task in send-lane outbox with adapter + from/to set")
 
 
+def test_b_to_a_roundtrip_echo() -> None:
+    """B writes (codex@laptop-b sends on B-to-A), A polls (claude@laptop-a
+    receives on B-to-A) and echoes, B collects. Direction reversed by config."""
+    root = _fresh_bridge("codex@laptop-b")
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_write as hw; importlib.reload(hw)
+    # B writes the task.
+    assert hw.main(["spiegel mich bitte", "--adapter", "echo"]) == 0
+
+    # Switch identity to A and poll.
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
+    import handoff_poll as hp; importlib.reload(hp)
+    import runners; importlib.reload(runners)
+    n = hp.poll_once()
+    assert n == 1, f"A sollte genau 1 Task in B-to-A verarbeiten, war {n}"
+
+    # Switch back to B and collect.
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = "codex@laptop-b"
+    importlib.reload(bc)
+    import handoff_collect as hc; importlib.reload(hc)
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        got = hc.collect_once(peek=True)
+    assert got == 1, "B sollte genau 1 Result einsammeln"
+    assert "spiegel mich bitte" in buf.getvalue()
+    print("  roundtrip OK — B→A echo end-to-end, reversed by configuration only")
+
+
 def main() -> int:
     print("=== Stage-2a Lane-Tests ===")
     tests = [test_lane_dirs_resolve_under_lane, test_default_lane_backcompat,
@@ -159,7 +188,8 @@ def main() -> int:
              test_codex_registered_and_allowlist,
              test_poll_dispatches_on_adapter_echo, test_poll_to_filter_skips_foreign,
              test_poll_unknown_adapter_errors,
-             test_writer_uses_send_lane_and_adapter]
+             test_writer_uses_send_lane_and_adapter,
+             test_b_to_a_roundtrip_echo]
     failed = 0
     for t in tests:
         try:
