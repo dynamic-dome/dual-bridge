@@ -108,21 +108,25 @@ def test_run_claude_nonzero_exit_without_answer_is_error() -> None:
 
 
 def _write_argdump_claude(tmp: Path) -> tuple[str, Path, Path]:
-    """A fake claude that dumps its argv AND its ANTHROPIC_API_KEY env to files,
-    then emits a valid result. Lets us assert which flags the adapter passes
-    (hook-disable) and that no inherited API key reaches the subprocess."""
+    """A fake claude that dumps its argv, its ANTHROPIC_API_KEY env, AND its
+    stdin to files, then emits a valid result. Lets us assert which flags the
+    adapter passes, that no inherited API key reaches the subprocess, and that
+    the prompt is delivered via stdin (not a CLI arg the cmd.exe wrapper mangles)."""
     bindir = tmp / "fakebin"; bindir.mkdir(parents=True, exist_ok=True)
     argfile = tmp / "argv.txt"
     envfile = tmp / "env_key.txt"
+    stdinfile = tmp / "stdin.txt"
     py = bindir / "fake_claude.py"
     py.write_text(
         "import sys, os, json\n"
         "try:\n"
         "    sys.stdout.reconfigure(encoding='utf-8')\n"
+        "    sys.stdin.reconfigure(encoding='utf-8')\n"
         "except Exception:\n"
         "    pass\n"
         f"open(r{str(argfile)!r}, 'w', encoding='utf-8').write('\\n'.join(sys.argv[1:]))\n"
         f"open(r{str(envfile)!r}, 'w', encoding='utf-8').write(os.environ.get('ANTHROPIC_API_KEY', '<UNSET>'))\n"
+        f"open(r{str(stdinfile)!r}, 'w', encoding='utf-8').write(sys.stdin.read())\n"
         "sys.stdout.write('\\ufeff' + json.dumps([{'type':'result','result':'ok'}]) + '\\n')\n"
         "sys.exit(0)\n",
         encoding="utf-8",
@@ -157,6 +161,31 @@ def test_run_claude_disables_hooks() -> None:
     settings_val = argv[argv.index("--settings") + 1]
     assert _json.loads(settings_val).get("disableAllHooks") is True, settings_val
     print("  claude OK — passes --settings disableAllHooks (hook-disable hardening)")
+
+
+def test_run_claude_sends_prompt_via_stdin_not_argv() -> None:
+    """Live Phase-6 finding: a long prompt with backticks/parens/newlines passed
+    as a CLI ARG gets mangled/truncated by B's claude.CMD wrapper (cmd.exe
+    quoting, global rule §10.3) — the reviewer then 'sees nothing'. Verified: the
+    SAME prompt works on A's claude.exe but not B's claude.CMD as an arg. Fix:
+    deliver the prompt via STDIN so the cmd.exe layer never touches it."""
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-stdin-"))
+    fake, argfile, _ = _write_argdump_claude(tmp)
+    stdinfile = tmp / "stdin.txt"
+    tricky = ("Review `git push origin main` (force? no). End with one line:\n"
+              "`VERDICT: accepted` or `VERDICT: rejected`.")
+    r = ca.run_claude(auftrag=tricky, fm={"task_id": "T1"}, workroot=tmp,
+                      claude_bin=fake)
+    assert r.status == "done", f"expected done, got {r.status}: {r.error_text}"
+    # The full prompt arrived via stdin, intact.
+    seen_stdin = stdinfile.read_text(encoding="utf-8")
+    assert tricky in seen_stdin, f"prompt not delivered via stdin: {seen_stdin!r}"
+    # And it is NOT passed as a trailing argv item.
+    argv = argfile.read_text(encoding="utf-8").splitlines()
+    assert tricky not in argv, f"prompt leaked into argv: {argv}"
+    print("  claude OK — prompt via stdin, not argv (cmd.exe quoting bypass)")
 
 
 def test_run_claude_passes_anti_hang_flags() -> None:
@@ -212,6 +241,7 @@ def main() -> int:
     tests = [test_parse_event_stream_with_hook_noise, test_parse_empty_is_empty,
              test_run_claude_happy, test_run_claude_not_found,
              test_run_claude_disables_hooks,
+             test_run_claude_sends_prompt_via_stdin_not_argv,
              test_run_claude_passes_anti_hang_flags,
              test_run_claude_drops_inherited_api_key,
              test_run_claude_nonzero_exit_with_valid_answer_is_done,

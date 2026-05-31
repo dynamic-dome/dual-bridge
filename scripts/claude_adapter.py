@@ -98,15 +98,21 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
     #                                    permission => cannot hang
     #   --permission-mode bypassPermissions -> defensive: never wait on a prompt
     #   --max-turns 1                 -> one turn, immediate exit
+    # Prompt via STDIN, NOT a CLI arg (verified live 2026-05-31, global rule
+    # §10.3): a long prompt with backticks/parens/newlines passed as an argument
+    # is mangled/truncated by B's claude.CMD wrapper (cmd.exe quoting) — the
+    # reviewer then "sees nothing". The SAME prompt works on A's claude.exe as an
+    # arg but not B's .CMD. Piping it on stdin bypasses the cmd.exe layer
+    # entirely, so the prompt arrives intact on every platform. (No trailing
+    # prompt arg; claude -p reads the prompt from stdin.)
     cmd = [exe, "-p", "--output-format", "json",
            "--settings", '{"disableAllHooks": true}',
            "--tools", "",
            "--permission-mode", "bypassPermissions",
-           "--max-turns", "1",
-           auftrag]
+           "--max-turns", "1"]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                              encoding="utf-8", stdin=subprocess.DEVNULL,
+                              encoding="utf-8", input=auftrag,
                               timeout=timeout, env=env)
     except subprocess.TimeoutExpired as exc:
         return RunnerResult(status="error", error_text=f"claude timeout nach {timeout}s",
