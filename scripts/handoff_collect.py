@@ -34,6 +34,10 @@ def show_result(path: bc.Path) -> None:
     commit = fm.get("commit", "")
     if branch:
         print(f"  branch    : {branch}  (commit {commit or '?'})")
+    verdict = fm.get("verdict", "")
+    if verdict:
+        reason = fm.get("verdict_reason", "")
+        print(f"  verdict   : {verdict}" + (f"  ({reason})" if reason else ""))
     print("-" * 60)
     print(body.rstrip())
     if fm.get("status") == "done" and branch:

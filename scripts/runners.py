@@ -21,12 +21,19 @@ class RunnerResult:
     error_text: str | None = None
     stderr_excerpt: str | None = None
     note: str | None = None
+    verdict: str | None = None         # "accepted" | "rejected" (review kind only)
+    verdict_reason: str | None = None
 
     def to_markdown(self, task_id: str, claimed_by: str, claimed_at: str) -> str:
         lines = ["## Quelle",
                  f"task_id {task_id}, geclaimt von {claimed_by} um {claimed_at}", ""]
         if self.status == "done":
             lines += ["## Antwort", self.antwort, ""]
+            if self.verdict:
+                lines += ["## Verdikt", f"verdict: {self.verdict}"]
+                if self.verdict_reason:
+                    lines += [f"verdict_reason: {self.verdict_reason}"]
+                lines += [""]
             if self.branch and self.commit:
                 lines += [
                     "## Artefakt (Git)",
