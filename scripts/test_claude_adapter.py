@@ -159,6 +159,28 @@ def test_run_claude_disables_hooks() -> None:
     print("  claude OK — passes --settings disableAllHooks (hook-disable hardening)")
 
 
+def test_run_claude_passes_anti_hang_flags() -> None:
+    """Live Phase-6 finding: claude -p with tools enabled + a review prompt that
+    names a risky action (git push / rm -rf) HANGS forever — claude wants a tool
+    permission and waits on stdin (DEVNULL) that never answers. The reviewer only
+    needs to JUDGE (text), never act, so the adapter must pass --tools "" +
+    --permission-mode bypassPermissions + --max-turns 1 to guarantee it
+    terminates regardless of prompt content."""
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-hang-"))
+    fake, argfile, _ = _write_argdump_claude(tmp)
+    r = ca.run_claude(auftrag="review git push", fm={"task_id": "T1"}, workroot=tmp,
+                      claude_bin=fake)
+    assert r.status == "done", f"expected done, got {r.status}: {r.error_text}"
+    argv = argfile.read_text(encoding="utf-8").splitlines()
+    assert "--tools" in argv and argv[argv.index("--tools") + 1] == "", f"no empty --tools: {argv}"
+    assert "--permission-mode" in argv, f"no --permission-mode: {argv}"
+    assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions", argv
+    assert "--max-turns" in argv and argv[argv.index("--max-turns") + 1] == "1", f"no --max-turns 1: {argv}"
+    print("  claude OK — passes --tools '' / bypassPermissions / --max-turns 1 (anti-hang)")
+
+
 def test_run_claude_drops_inherited_api_key() -> None:
     """Live Phase-6 finding (DCO brain.py leak pattern): an inherited, INVALID
     ANTHROPIC_API_KEY in the env takes precedence over the subscription login and
@@ -190,6 +212,7 @@ def main() -> int:
     tests = [test_parse_event_stream_with_hook_noise, test_parse_empty_is_empty,
              test_run_claude_happy, test_run_claude_not_found,
              test_run_claude_disables_hooks,
+             test_run_claude_passes_anti_hang_flags,
              test_run_claude_drops_inherited_api_key,
              test_run_claude_nonzero_exit_with_valid_answer_is_done,
              test_run_claude_nonzero_exit_without_answer_is_error]

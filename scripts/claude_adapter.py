@@ -90,8 +90,20 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
     # Authoritative hook-disable for current Claude Code (v2.1+): an inline
     # settings override turns off ALL hooks for this headless run, so a
     # user-configured Stop/SessionEnd hook can never break the reviewer.
+    # Anti-hang (verified live 2026-05-31): claude -p with tools enabled + a
+    # review prompt naming a risky action (git push / rm -rf) HANGS forever — it
+    # wants a tool-use permission and waits on stdin (DEVNULL) that never comes.
+    # The reviewer only JUDGES (text), never acts, so:
+    #   --tools ""                    -> no tools => nothing can prompt for a
+    #                                    permission => cannot hang
+    #   --permission-mode bypassPermissions -> defensive: never wait on a prompt
+    #   --max-turns 1                 -> one turn, immediate exit
     cmd = [exe, "-p", "--output-format", "json",
-           "--settings", '{"disableAllHooks": true}', auftrag]
+           "--settings", '{"disableAllHooks": true}',
+           "--tools", "",
+           "--permission-mode", "bypassPermissions",
+           "--max-turns", "1",
+           auftrag]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                               encoding="utf-8", stdin=subprocess.DEVNULL,
