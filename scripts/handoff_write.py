@@ -1,11 +1,13 @@
-"""Stage 0 — Laptop A: write a task into the bridge outbox.
+"""Write a bridge task into this endpoint's send-lane outbox.
 
 Usage:
-    python handoff_write.py "Dein Auftragstext"
-    python handoff_write.py --kind echo "Echo this please"
+    python handoff_write.py "Auftragstext"
+    python handoff_write.py --kind implement --adapter codex --repo <url> "..."
+    python handoff_write.py --adapter claude --to claude@laptop-a "..."
 
-Stage 0 default kind is `echo`: Laptop B will not run any LLM, it just echoes
-the task body back. This proves the transport + schema + Drive roundtrip.
+The task is written into lane-<send_lane>/outbox/ of THIS endpoint
+(DUAL_BRIDGE_ENDPOINT). `--adapter` selects which runner the receiver uses
+(echo/codex/claude); `--to` overrides the target endpoint (default: the peer).
 """
 from __future__ import annotations
 
