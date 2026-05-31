@@ -120,6 +120,17 @@ def _write_fake_codex(tmp: Path, *, mode: str) -> Path:
         "        cd_dir = argv[i+1]; i += 2; continue\n"
         "    i += 1\n"
         "workdir = cd_dir or os.getcwd()\n"
+        "# Record how the prompt arrived: stdin (real codex reads it when the\n"
+        "# positional arg is '-') and the full argv. Lets a test prove the prompt\n"
+        "# is piped, not passed as a cmd.exe-manglable arg (P008 / rule 10.8).\n"
+        "stdin_text = sys.stdin.read() if not sys.stdin.isatty() else ''\n"
+        "import json as _json\n"
+        "# Write the invocation record OUTSIDE workdir (in its parent), so it is\n"
+        "# never seen by `git status` and cannot turn a no-file-change run into a\n"
+        "# committed change (would break test_task_no_file_change_is_done).\n"
+        "inv_path = os.path.join(os.path.dirname(workdir), '_codex_invocation.json')\n"
+        "open(inv_path, 'w', encoding='utf-8')"
+        ".write(_json.dumps({'argv': argv, 'stdin': stdin_text}))\n"
         "if mode == 'hang':\n"
         "    import time; time.sleep(30)\n"
         "if mode == 'fail':\n"
@@ -168,6 +179,37 @@ def test_task_happy_path_writes_and_pushes() -> None:
     assert any("codex_made_this" in f for f in r.changed_files)
     assert "done" in r.antwort
     print("  task OK -- happy path: file written, branch pushed, answer captured")
+
+
+def test_task_prompt_via_stdin_not_arg() -> None:
+    """The (possibly long, special-char) prompt must reach codex via STDIN, not
+    as a positional CLI arg — otherwise B's codex.CMD wrapper mangles/truncates
+    it at the cmd.exe quoting layer (observed live 2026-05-31: codex saw the
+    prompt only up to the first word; global rule 10.8 / P008, same fix the
+    claude_adapter already carries). The positional arg must be '-' so real
+    codex reads the instructions from stdin."""
+    import json as _json
+    long_prompt = (
+        "## Auftrag\nImplementiere `secret_sweep_violation(x: dict) -> str | None` "
+        "mit Mustern: sk-ant-..., -----BEGIN PRIVATE KEY-----, (klammern) | pipes.\n"
+        * 3
+    )
+    tmp = Path(tempfile.mkdtemp(prefix="task-stdin-"))
+    remote, work_parent = _init_local_repo(tmp)
+    bindir = _write_fake_codex(tmp, mode="notext")  # writes invocation, no commit
+    codex_bin = str(bindir / ("codex.cmd" if os.name == "nt" else "codex"))
+    import codex_adapter as ca
+    ca.run_codex_task(
+        auftrag=long_prompt, repo=str(remote), base_branch="main",
+        task_id="T9", workroot=work_parent, codex_bin=codex_bin,
+    )
+    inv_path = work_parent / "_codex_invocation.json"
+    assert inv_path.exists(), "fake codex did not record its invocation"
+    inv = _json.loads(inv_path.read_text(encoding="utf-8"))
+    assert inv["stdin"] == long_prompt, "prompt did NOT arrive intact on stdin"
+    assert long_prompt not in inv["argv"], "prompt must NOT be a positional arg"
+    assert "-" in inv["argv"], "positional '-' (read-stdin) marker missing from argv"
+    print("  task OK -- prompt piped via stdin, '-' arg, not mangled as CLI arg")
 
 
 def test_task_codex_not_found() -> None:

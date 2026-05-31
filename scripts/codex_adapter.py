@@ -189,7 +189,14 @@ def run_codex_task(
     #      -o <answer.txt>       final agent message written to a file (robust;
     #                            avoids the BOM/event-stream/hook-noise stdout
     #                            parsing problem of L17 entirely)
-    #    stdin=DEVNULL -> Windows hang guard; prompt passed as the positional arg.
+    #    Prompt via STDIN with the positional arg '-', NOT as a CLI argument
+    #    (global rule 10.8 / P008, observed live 2026-05-31): a long prompt with
+    #    backticks/parens/newlines passed as an argument is mangled/truncated by
+    #    B's codex.CMD wrapper at the cmd.exe quoting layer — codex then sees the
+    #    prompt only up to the first word. `codex exec --help`: "If not provided
+    #    as an argument (or if `-` is used), instructions are read from stdin."
+    #    So we pass '-' and pipe the prompt on stdin; cmd.exe never touches it.
+    #    (Same fix the claude_adapter already carries.)
     #    The -o answer file lives OUTSIDE the workdir, so it can never be picked
     #    up by `git status` / committed (cleaner than relying on a post-unlink).
     answer_file = Path(workroot) / f".codex-answer-{task_id}.txt"
@@ -198,12 +205,12 @@ def run_codex_task(
         "-C", str(workdir),
         "-s", "workspace-write",
         "-o", str(answer_file),
-        auftrag,
+        "-",
     ]
     try:
         proc = subprocess.run(
             cmd, cwd=str(workdir), capture_output=True, text=True,
-            encoding="utf-8", stdin=subprocess.DEVNULL, timeout=timeout,
+            encoding="utf-8", input=auftrag, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
         _safe_unlink(answer_file)
