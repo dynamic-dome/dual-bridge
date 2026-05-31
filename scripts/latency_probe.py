@@ -1,10 +1,16 @@
-"""Stage 0 — Latency probe: measure real A->B->A roundtrip time.
+"""Stage 2a — Latency probe: measure real send->peer->back roundtrip time.
 
-Run this on Laptop A *while* `handoff_poll.py --watch` runs on Laptop B.
+Endpoint-relative: the prober runs as THIS endpoint (DUAL_BRIDGE_ENDPOINT) and
+measures its own send lane. On Laptop A (claude@laptop-a) that is A->B->A; on
+Laptop B (codex@laptop-b) it is B->A->B. All three I/O sites (write, wait,
+archive) resolve through bc.send_lane(), which is deterministic for a fixed
+endpoint, so they always share one lane.
+
+Run this on one endpoint *while* `handoff_poll.py --watch` runs on the peer.
 
 It writes N echo tasks (one at a time), waits for each matching result to
-appear in the inbox, and records the wall-clock roundtrip. At the end it prints
-a small stats summary and appends a line to latency-baseline.md for the record.
+appear in the send-lane inbox, and records the wall-clock roundtrip. At the end
+it prints a small stats summary and appends a line to latency-baseline.md.
 
 Usage:
     python latency_probe.py                 # 5 probes, 1s apart
@@ -12,10 +18,10 @@ Usage:
     python latency_probe.py --count 5 --gap 3 --timeout 180
 
 The roundtrip measured here is end-to-end as the *user* experiences it:
-  task written (A)  ->  Drive sync up  ->  B polls + claims + echoes
-                    ->  Drive sync down ->  result visible to A
-So it includes B's poll interval (default 15s). To isolate pure sync latency,
-run B's poller with a short interval (e.g. --interval 2) during the probe.
+  task written  ->  Drive sync up  ->  peer polls + claims + echoes
+                ->  Drive sync down ->  result visible again
+So it includes the peer's poll interval (default 15s). To isolate pure sync
+latency, run the peer's poller with a short interval (e.g. --interval 2).
 """
 from __future__ import annotations
 
@@ -27,16 +33,28 @@ import bridge_common as bc
 
 
 def _write_probe(index: int) -> tuple[str, float]:
-    """Write one probe task. Returns (task_id, monotonic_start)."""
+    """Write one probe task into this endpoint's send lane.
+
+    Returns (task_id, monotonic_start). The frontmatter mirrors handoff_write:
+    schema_version 2, from/to/adapter so the peer poller dispatches it as echo.
+    """
+    lane = bc.send_lane()
+    me = bc.this_endpoint()
+    # default `to` = the receiver of my send lane (same logic as handoff_write)
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
     task_id = bc.make_task_id()
     frontmatter = {
         "created": bc.now_iso(),
-        "agent": f"laptop-a-claude@{bc.DEVICE}",
-        "target_agent": "laptop-b-worker",
+        "schema_version": "2",
+        "agent": me,
+        "from": me,
+        "to": to,
         "purpose": "handoff",
         "status": "open",
         "task_id": task_id,
         "kind": "echo",
+        "adapter": "echo",
         "claimed_by": "",
         "claimed_at": "",
         "probe": f"latency-{index}",
@@ -47,9 +65,9 @@ def _write_probe(index: int) -> tuple[str, float]:
         "## Akzeptanzkriterien\n"
         "- [ ] Result im inbox/ mit demselben task_id\n\n"
         "## Ergebnis\n"
-        "<B füllt das>\n"
+        "<Empfänger füllt das>\n"
     )
-    out_path = bc.outbox_dir() / f"task-{task_id}.md"
+    out_path = bc.lane_outbox(lane) / f"task-{task_id}.md"
     bc.write_text_utf8(out_path, bc.build_document(frontmatter, body))
     # time.monotonic() is allowed; only Date.now()/random-style wall clock for
     # *ids* must stay deterministic. Wall-clock measurement is the whole point.
@@ -57,9 +75,9 @@ def _write_probe(index: int) -> tuple[str, float]:
 
 
 def _wait_for_result(task_id: str, timeout: float) -> float | None:
-    """Poll the inbox for result-<task_id>.md. Returns monotonic finish time
-    or None on timeout."""
-    target = bc.inbox_dir() / f"result-{task_id}.md"
+    """Poll the send-lane inbox for result-<task_id>.md. Returns monotonic
+    finish time or None on timeout. Uses the same lane as _write_probe."""
+    target = bc.lane_inbox(bc.send_lane()) / f"result-{task_id}.md"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if target.exists():
@@ -69,17 +87,19 @@ def _wait_for_result(task_id: str, timeout: float) -> float | None:
 
 
 def _archive_result(task_id: str) -> None:
-    """Move the collected result into _processed/ (no delete)."""
-    src = bc.inbox_dir() / f"result-{task_id}.md"
+    """Move the collected result into the send lane's _processed/ (no delete)."""
+    lane = bc.send_lane()
+    src = bc.lane_inbox(lane) / f"result-{task_id}.md"
     if src.exists():
         try:
-            src.replace(bc.processed_dir() / src.name)
+            src.replace(bc.lane_processed(lane) / src.name)
         except OSError:
             pass
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Measure A->B->A roundtrip latency.")
+    parser = argparse.ArgumentParser(
+        description="Measure send-lane roundtrip latency (endpoint-relative).")
     parser.add_argument("--count", type=int, default=5, help="Number of probes.")
     parser.add_argument("--gap", type=float, default=1.0, help="Seconds between probes.")
     parser.add_argument(

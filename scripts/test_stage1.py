@@ -275,22 +275,28 @@ def test_poll_routes_implement_to_codex() -> None:
     bindir = _write_fake_codex(tmp, mode="write")
     codex_bin = str(bindir / ("codex.cmd" if os.name == "nt" else "codex"))
 
-    # Point the poller's codex config at our fake + temp workroot.
-    hp.CODEX_BIN = codex_bin
+    # Point the poller's codex workroot at our temp; the codex runner reads the
+    # bin/timeout from the environment (DUAL_BRIDGE_CODEX_BIN/_TIMEOUT).
     hp.CODEX_WORKROOT = work_parent
-    hp.CODEX_TIMEOUT = 600
+    os.environ["DUAL_BRIDGE_CODEX_BIN"] = codex_bin
+    os.environ["DUAL_BRIDGE_CODEX_TIMEOUT"] = "600"
 
     task_id = bc.make_task_id()
     fm = {
         "created": bc.now_iso(), "agent": "laptop-a", "target_agent": "laptop-b",
         "purpose": "handoff", "status": "open", "task_id": task_id,
-        "kind": "implement", "repo": str(remote), "base_branch": "main",
+        "kind": "implement", "adapter": "codex",
+        "repo": str(remote), "base_branch": "main",
         "claimed_by": "", "claimed_at": "",
     }
     task = bc.outbox_dir() / f"task-{task_id}.md"
     bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nbau das feature\n"))
 
-    assert hp.process_one(task) is True
+    try:
+        assert hp.process_one(task, lane=bc.DEFAULT_LANE) is True
+    finally:
+        del os.environ["DUAL_BRIDGE_CODEX_BIN"]
+        del os.environ["DUAL_BRIDGE_CODEX_TIMEOUT"]
     result = bc.inbox_dir() / f"result-{task_id}.md"
     rfm, rbody = bc.parse_frontmatter(bc.read_text_utf8(result))
     assert rfm["status"] == "done", f"expected done, got {rfm.get('status')}"
@@ -319,11 +325,11 @@ def test_poll_echo_still_works() -> None:
     }
     task = bc.outbox_dir() / f"task-{task_id}.md"
     bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nspiegel mich\n"))
-    assert hp.process_one(task) is True
+    assert hp.process_one(task, lane=bc.DEFAULT_LANE) is True
     rfm, rbody = bc.parse_frontmatter(
         bc.read_text_utf8(bc.inbox_dir() / f"result-{task_id}.md"))
     assert rfm["status"] == "done"
-    assert "Echo (Stage 0" in rbody, "echo path changed -- regression!"
+    assert "spiegel mich" in rbody and "Echo" in rbody, "echo path changed -- regression!"
     assert "branch" not in rfm, "echo result must not carry a branch"
     print("  poll OK -- echo regression intact, no codex, no branch")
 

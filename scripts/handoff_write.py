@@ -1,11 +1,13 @@
-"""Stage 0 — Laptop A: write a task into the bridge outbox.
+"""Write a bridge task into this endpoint's send-lane outbox.
 
 Usage:
-    python handoff_write.py "Dein Auftragstext"
-    python handoff_write.py --kind echo "Echo this please"
+    python handoff_write.py "Auftragstext"
+    python handoff_write.py --kind implement --adapter codex --repo <url> "..."
+    python handoff_write.py --adapter claude --to claude@laptop-a "..."
 
-Stage 0 default kind is `echo`: Laptop B will not run any LLM, it just echoes
-the task body back. This proves the transport + schema + Drive roundtrip.
+The task is written into lane-<send_lane>/outbox/ of THIS endpoint
+(DUAL_BRIDGE_ENDPOINT). `--adapter` selects which runner the receiver uses
+(echo/codex/claude); `--to` overrides the target endpoint (default: the peer).
 """
 from __future__ import annotations
 
@@ -37,20 +39,32 @@ def main(argv: list[str] | None = None) -> int:
         "--base-branch", default="main",
         help="Base branch to start from (default: main).",
     )
+    parser.add_argument("--adapter", default="echo",
+                        choices=["echo", "codex", "claude"],
+                        help="Which runner the receiver should use.")
+    parser.add_argument("--to", default="",
+                        help="Target endpoint (default: the peer of my endpoint).")
     args = parser.parse_args(argv)
 
     bc.ensure_dirs()
-
+    lane = bc.send_lane()
+    me = bc.this_endpoint()
+    # default `to` = the receiver of my send lane
+    to = args.to or next((ep for ep, cfg in bc.ENDPOINTS.items()
+                          if lane in cfg["receives_on"]), "")
     task_id = bc.make_task_id()
-    created = bc.now_iso()
     frontmatter = {
-        "created": created,
-        "agent": f"laptop-a-claude@{bc.DEVICE}",
+        "created": bc.now_iso(),
+        "schema_version": "2",
+        "agent": me,
+        "from": me,
+        "to": to,
         "target_agent": args.target,
         "purpose": "handoff",
         "status": "open",
         "task_id": task_id,
         "kind": args.kind,
+        "adapter": args.adapter,
         "repo": args.repo,
         "base_branch": args.base_branch,
         "claimed_by": "",
@@ -62,17 +76,11 @@ def main(argv: list[str] | None = None) -> int:
         "## Akzeptanzkriterien\n"
         "- [ ] Ergebnis liegt im inbox/ mit demselben task_id\n\n"
         "## Ergebnis\n"
-        "<wird von Laptop B gefüllt>\n"
+        "<wird vom Empfänger gefüllt>\n"
     )
-    doc = bc.build_document(frontmatter, body)
-
-    out_path = bc.outbox_dir() / f"task-{task_id}.md"
-    bc.write_text_utf8(out_path, doc)
-
-    print(f"[A] Task geschrieben: {out_path.name}")
-    print(f"    task_id = {task_id}")
-    print(f"    kind    = {args.kind}")
-    print(f"    status  = open  →  warte auf Laptop B (inbox/result-{task_id}.md)")
+    out_path = bc.lane_outbox(lane) / f"task-{task_id}.md"
+    bc.write_text_utf8(out_path, bc.build_document(frontmatter, body))
+    print(f"[{me}] Task → lane-{lane}/outbox/{out_path.name} (adapter={args.adapter}, to={to})")
     return 0
 
 

@@ -17,16 +17,13 @@ import sys
 import time
 
 import bridge_common as bc
-import codex_adapter as ca
+import runners  # noqa: F401 -- registers echo
+import codex_adapter  # noqa: F401 -- registers codex
+import claude_adapter  # noqa: F401 -- registers claude
 
-# Stage 1 codex config (overridable via env on Laptop B).
-CODEX_BIN = os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None
 CODEX_WORKROOT = bc.Path(
-    os.environ.get("DUAL_BRIDGE_WORKROOT")
-    or (bc.Path.home() / "dual-bridge-work")
+    os.environ.get("DUAL_BRIDGE_WORKROOT") or (bc.Path.home() / "dual-bridge-work")
 )
-CODEX_TIMEOUT = int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600"))
-LLM_KINDS = {"implement", "research", "review", "test"}
 
 
 def _is_conflict_copy(name: str) -> bool:
@@ -34,143 +31,132 @@ def _is_conflict_copy(name: str) -> bool:
     return "(" in name and ")" in name
 
 
-def process_one(task_path: bc.Path) -> bool:
-    """Claim + echo a single task file. Returns True if a result was written."""
+def _build_result_fm(fm: dict, result, task_id: str, adapter: str) -> dict:
+    """Assemble the result frontmatter from a RunnerResult. Reply goes back to
+    the original sender (fm['from']); branch/commit only if the runner set them."""
+    result_fm = {
+        "created": bc.now_iso(),
+        "agent": fm["claimed_by"],
+        "from": bc.this_endpoint(),
+        "to": fm.get("from", ""),
+        "purpose": "handoff",
+        "status": result.status,
+        "task_id": task_id,
+        "kind": fm.get("kind", "echo"),
+        "adapter": adapter,
+        "replies_to": f"task-{task_id}.md",
+    }
+    if result.branch:
+        result_fm["branch"] = result.branch
+    if result.commit:
+        result_fm["commit"] = result.commit
+    return result_fm
+
+
+def process_one(task_path: bc.Path, lane: str) -> bool:
+    """Claim + route + run + publish a single task within `lane`. Returns True
+    if a result was written."""
     fm, body = bc.parse_frontmatter(bc.read_text_utf8(task_path))
     if fm.get("status") != "open":
-        return False  # already claimed/done by someone else
+        return False
 
     task_id = fm.get("task_id", task_path.stem.replace("task-", ""))
     # Security: the task_id reaches a result filename and a git branch name.
     # Reject anything that is not a well-formed make_task_id() to close
     # path-traversal / branch-injection via a hostile/corrupt task file.
     if not bc.is_valid_task_id(task_id):
-        print(f"[B] Task {task_path.name} hat ungültige task_id {task_id!r} — übersprungen.")
+        print(f"[{lane}] Task {task_path.name} hat ungültige task_id {task_id!r} — übersprungen.")
         return False
+
+    to = fm.get("to", "")
+    if to and to != bc.this_endpoint():
+        return False
+
     claimed_path = bc.claim_task(task_path, bc.DEVICE)
     if claimed_path is None:
-        print(f"[B] Konnte {task_path.name} nicht claimen (Race/Lock) — übersprungen.")
+        print(f"[{lane}] Konnte {task_path.name} nicht claimen — übersprungen.")
         return False
 
     # Re-read from the claimed path to confirm we hold the canonical content.
     fm, body = bc.parse_frontmatter(bc.read_text_utf8(claimed_path))
-    fm["claimed_by"] = f"laptop-b-worker@{bc.DEVICE}"
+    fm["claimed_by"] = f"{bc.this_endpoint()}@{bc.DEVICE}"
     fm["claimed_at"] = bc.now_iso()
 
-    # --- Stage 0 echo OR Stage 1 codex, by kind ----------------------------
-    kind = fm.get("kind", "echo")
-    extra_fm: dict[str, str] = {}
-    if kind in LLM_KINDS:
-        repo = fm.get("repo", "")
-        base_branch = fm.get("base_branch", "main")
-        if not repo:
-            result_status = "error"
-            result_body = (
-                "## Fehler\n"
-                f"Task {task_id} ist kind:{kind}, hat aber kein `repo:`-Feld. "
-                "Laptop A muss --repo angeben.\n"
-            )
-        else:
-            print(f"[B] codex exec für task {task_id} (kind={kind}, repo={repo}) ...")
-            cr = ca.run_codex_task(
-                auftrag=_extract_section(body, "## Auftrag") or body.strip(),
-                repo=repo, base_branch=base_branch, task_id=task_id,
-                workroot=CODEX_WORKROOT, codex_bin=CODEX_BIN, timeout=CODEX_TIMEOUT,
-            )
-            result_status = cr.status
-            result_body = _build_codex_result_body(task_id, fm, cr)
-            if cr.branch:
-                extra_fm["branch"] = cr.branch
-            if cr.commit:
-                extra_fm["commit"] = cr.commit
+    auftrag = _extract_section(body, "## Auftrag") or body.strip()
+    adapter = fm.get("adapter", "echo")
+    runner = runners.RUNNERS.get(adapter)
+    if runner is None:
+        result = runners.RunnerResult(status="error",
+                                      error_text=f"unbekannter adapter: {adapter!r}")
     else:
-        # Stage 0 echo (unchanged behaviour).
-        result_status = "done"
-        auftrag = _extract_section(body, "## Auftrag") or body.strip()
-        result_body = (
-            "## Quelle\n"
-            f"task_id {task_id}, geclaimt von {fm['claimed_by']} um {fm['claimed_at']}\n\n"
-            "## Echo (Stage 0 — kein LLM)\n"
-            f"{auftrag}\n\n"
-            "## Hinweis\n"
-            "Dies ist die elementare Stage-0-Antwort: Laptop B hat den Task gelesen "
-            "und den Auftragstext zurückgespiegelt. In Stage 1 ersetzt ein echter "
-            "Codex-/Claude-Aufruf dieses Echo.\n"
-        )
+        try:
+            result = runner(auftrag=auftrag, fm=fm, workroot=CODEX_WORKROOT)
+        except Exception as exc:  # noqa: BLE001 -- a runner must never crash the poller
+            result = runners.RunnerResult(status="error",
+                                          error_text=f"{adapter} runner crash: {type(exc).__name__}: {exc}")
 
-    fm["status"] = result_status
-    result_fm = {
-        "created": bc.now_iso(),
-        "agent": fm["claimed_by"],
-        "target_agent": fm.get("agent", "laptop-a-claude"),
-        "purpose": "handoff",
-        "status": result_status,
-        "task_id": task_id,
-        "kind": fm.get("kind", "echo"),
-        "replies_to": f"task-{task_id}.md",
-        **extra_fm,
-    }
-    result_doc = bc.build_document(result_fm, result_body)
-    result_path = bc.inbox_dir() / f"result-{task_id}.md"
+    fm["status"] = result.status
+    result_fm = _build_result_fm(fm, result, task_id, adapter)
+    result_body = result.to_markdown(task_id, fm["claimed_by"], fm["claimed_at"])
+    result_path = bc.lane_inbox(lane) / f"result-{task_id}.md"
     # F1/F3: exclusive create — never silently overwrite an existing result.
     # If a result already exists for this task_id, another claim won; we bail
     # and still archive our claimed task so it does not get stuck (F4).
-    if not bc.write_text_exclusive(result_path, result_doc):
-        print(f"[B] Result für {task_id} existiert bereits — anderer Claim gewann. Archiviere Task.")
-        _archive_claimed(claimed_path, fm, body)
+    if not bc.write_text_exclusive(result_path, bc.build_document(result_fm, result_body)):
+        print(f"[{lane}] Result für {task_id} existiert bereits — anderer Claim gewann.")
+        _archive_claimed(claimed_path, fm, body, lane)
         return False
 
     # Persist the updated (done) task and move it into _processed/ (no delete).
     bc.write_text_atomic(claimed_path, bc.build_document(fm, body))
-    _archive_claimed(claimed_path, fm, body)
-
-    print(f"[B] Verarbeitet: task_id {task_id} → inbox/{result_path.name}")
+    _archive_claimed(claimed_path, fm, body, lane)
+    print(f"[{lane}] Verarbeitet: {task_id} → inbox/{result_path.name}")
     return True
 
 
-def _archive_claimed(claimed_path: bc.Path, fm: dict, body: str) -> bool:
+def _archive_claimed(claimed_path: bc.Path, fm: dict, body: str, lane: str) -> bool:
     """Move a processed (done) claimed task into _processed/. Returns True on
     success. On failure the file stays put but is logged — poll_once() will
     re-attempt archival on the next pass (F4: no silent stuck tasks)."""
     if not claimed_path.exists():
         return True  # already moved
-    dest = bc.processed_dir() / claimed_path.name
+    dest = bc.lane_processed(lane) / claimed_path.name
     try:
         claimed_path.replace(dest)
         return True
     except OSError as exc:
-        print(f"[B] Archivieren fehlgeschlagen für {claimed_path.name}: {exc} — Retry nächster Pass.")
+        print(f"[{lane}] Archivieren fehlgeschlagen für {claimed_path.name}: {exc} — Retry nächster Pass.")
         return False
 
 
-def _quarantine_claimed(claimed_path: bc.Path) -> bool:
+def _quarantine_claimed(claimed_path: bc.Path, lane: str) -> bool:
     """Move a malformed/hostile stranded claim into _errors/. The destination
     name is derived from the (glob-guaranteed safe) source filename, never from
     the untrusted frontmatter task_id. Never raises."""
     if not claimed_path.exists():
         return True
-    bc.errors_dir().mkdir(parents=True, exist_ok=True)
-    dest = bc.errors_dir() / claimed_path.name
+    bc.lane_errors(lane).mkdir(parents=True, exist_ok=True)
+    dest = bc.lane_errors(lane) / claimed_path.name
     try:
         claimed_path.replace(dest)
         return True
     except OSError as exc:
-        print(f"[B] Quarantäne fehlgeschlagen für {claimed_path.name}: {exc} — Retry nächster Pass.")
+        print(f"[{lane}] Quarantäne fehlgeschlagen für {claimed_path.name}: {exc} — Retry nächster Pass.")
         return False
 
 
-def _requeue_claimed(claimed_path: bc.Path, fm: dict, body: str, task_id: str) -> bool:
+def _requeue_claimed(claimed_path: bc.Path, fm: dict, body: str, task_id: str, lane: str) -> bool:
     """P0 recovery: a claim that never produced a result is put back as an open
     task so it is not lost. Resets status to open, clears the claim stamps, and
     renames back to task-<id>.md. Uses an exclusive write so we never clobber a
     fresh open task that may already carry this id. Returns True on requeue."""
     if not claimed_path.exists():
         return False
-    target = bc.outbox_dir() / f"task-{task_id}.md"
+    target = bc.lane_outbox(lane) / f"task-{task_id}.md"
     if target.exists():
         # An open task with this id already exists -> our stranded claim is a
         # duplicate; drop it into _processed/ rather than losing or doubling it.
-        return _archive_claimed(claimed_path, fm, body)
+        return _archive_claimed(claimed_path, fm, body, lane)
     fm = dict(fm)
     fm["status"] = "open"
     fm["claimed_by"] = ""
@@ -201,45 +187,15 @@ def _extract_section(body: str, header: str) -> str | None:
     return text or None
 
 
-def _build_codex_result_body(task_id: str, fm: dict, cr: "ca.CodexResult") -> str:
-    """Render a result body from a CodexResult. On done with a branch, include
-    the git-pull hint; on error, surface the error + stderr prominently."""
-    lines = [
-        "## Quelle",
-        f"task_id {task_id}, geclaimt von {fm.get('claimed_by','?')} um {fm.get('claimed_at','?')}",
-        "",
-    ]
-    if cr.status == "done":
-        lines += ["## Codex-Antwort", cr.antwort, ""]
-        if cr.branch and cr.commit:
-            lines += [
-                "## Artefakt (Git)",
-                f"Branch `{cr.branch}` auf dem Remote, Commit `{cr.commit}`.",
-                f"Geänderte Dateien: {', '.join(cr.changed_files) or '—'}",
-                "",
-                "## So holst du es (auf A)",
-                "```",
-                f"git fetch && git checkout {cr.branch}",
-                "```",
-                "",
-            ]
-        elif cr.note:
-            lines += ["## Hinweis", cr.note, ""]
-    else:
-        lines += [
-            "## FEHLER",
-            cr.error_text or "unbekannter Fehler",
-            "",
-        ]
-        if cr.antwort:
-            lines += ["## Codex-Antwort (trotz Fehler erhalten)", cr.antwort, ""]
-        if cr.stderr_excerpt:
-            lines += ["## stderr (Auszug)", "```", cr.stderr_excerpt, "```", ""]
-    return "\n".join(lines)
-
-
 def poll_once() -> int:
     bc.ensure_dirs()
+    count = 0
+    for lane in bc.receive_lanes():
+        count += _poll_lane(lane)
+    return count
+
+
+def _poll_lane(lane: str) -> int:
     count = 0
 
     # F4 + P0: recover stranded .claimed-* tasks from a prior pass. Two cases:
@@ -249,7 +205,7 @@ def poll_once() -> int:
     #      claim but BEFORE writing the result. Blind-archiving here loses the
     #      task forever (P0). Requeue it instead: rename back to task-<id>.md
     #      with status:open so the next pass re-processes it.
-    for stranded in sorted(bc.outbox_dir().glob("task-*.claimed-*.md")):
+    for stranded in sorted(bc.lane_outbox(lane).glob("task-*.claimed-*.md")):
         if _is_conflict_copy(stranded.name):
             continue
         fm, body = bc.parse_frontmatter(bc.read_text_utf8(stranded))
@@ -258,29 +214,26 @@ def poll_once() -> int:
         # The process_one guard does not cover stranded claims, so validate here
         # too — a corrupt/hostile .claimed-* gets quarantined, never honoured.
         if not bc.is_valid_task_id(task_id):
-            if _quarantine_claimed(stranded):
-                print(f"[B] Stranded-Claim {stranded.name} mit ungültiger task_id {task_id!r} → _errors/.")
+            if _quarantine_claimed(stranded, lane):
+                print(f"[{lane}] Stranded-Claim {stranded.name} ungültige task_id → _errors/.")
             continue
-        has_result = (bc.inbox_dir() / f"result-{task_id}.md").exists()
+        has_result = (bc.lane_inbox(lane) / f"result-{task_id}.md").exists()
         if fm.get("status") in ("done", "error") and has_result:
-            if _archive_claimed(stranded, fm, body):
-                print(f"[B] Nachgeholt archiviert: {stranded.name}")
+            if _archive_claimed(stranded, fm, body, lane):
+                print(f"[{lane}] Nachgeholt archiviert: {stranded.name}")
         else:
-            if _requeue_claimed(stranded, fm, body, task_id):
-                print(f"[B] P0-Recovery: {stranded.name} ohne Result → requeued (status:open).")
+            if _requeue_claimed(stranded, fm, body, task_id, lane):
+                print(f"[{lane}] P0-Recovery: {stranded.name} → requeued (open).")
 
     # Fresh open tasks. Exclude already-claimed names (the glob above handled them).
-    for task_path in sorted(bc.outbox_dir().glob("task-*.md")):
-        if ".claimed-" in task_path.name:
-            continue
-        if _is_conflict_copy(task_path.name):
-            print(f"[B] Drive-Conflict-Copy ignoriert: {task_path.name}")
+    for task_path in sorted(bc.lane_outbox(lane).glob("task-*.md")):
+        if ".claimed-" in task_path.name or _is_conflict_copy(task_path.name):
             continue
         try:
-            if process_one(task_path):
+            if process_one(task_path, lane):
                 count += 1
-        except Exception as exc:  # noqa: BLE001 — one bad task must not kill the poller
-            print(f"[B] Task {task_path.name} warf {type(exc).__name__}: {exc} — übersprungen.")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{lane}] Task {task_path.name} warf {type(exc).__name__}: {exc} — übersprungen.")
     return count
 
 

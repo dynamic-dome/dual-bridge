@@ -69,20 +69,11 @@ def _answer_from_json(value: object) -> str:
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from runners import RunnerResult, register_runner
 
-@dataclass
-class CodexResult:
-    status: str                      # "done" | "error"
-    antwort: str = ""                # codex answer text (kept even on push-fail)
-    branch: str | None = None
-    commit: str | None = None
-    changed_files: list[str] = field(default_factory=list)
-    error_text: str | None = None
-    stderr_excerpt: str | None = None
-    note: str | None = None
+CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
 
 
 def _run_git(workdir: Path | None, *args: str) -> subprocess.CompletedProcess:
@@ -163,6 +154,14 @@ def run_codex_task(
     """Run one task end-to-end on Laptop B. Every path returns a CodexResult
     with status done|error -- never raises to the caller (spec section 5: no
     stuck, no silent failure)."""
+    allow = os.environ.get("DUAL_BRIDGE_REPO_ALLOWLIST", "").strip()
+    if allow:
+        import fnmatch
+        patterns = [p.strip() for p in allow.split(",") if p.strip()]
+        if not any(fnmatch.fnmatch(repo, pat) for pat in patterns):
+            return CodexResult(status="error",
+                               error_text=f"repo nicht in allowlist abgelehnt: {repo}")
+
     branch = f"bridge/task-{task_id}"
 
     # 1. codex on PATH?
@@ -272,3 +271,23 @@ def _safe_unlink(path: Path) -> None:
             path.unlink()
     except OSError:
         pass
+
+
+def _codex_runner(auftrag: str, fm: dict, workroot):
+    """Adapt run_codex_task to the (auftrag, fm, workroot) runner signature."""
+    task_id = fm.get("task_id")
+    if not task_id:
+        return RunnerResult(status="error", error_text="task ohne task_id")
+    wr = Path(workroot) if workroot is not None else Path.home() / "dual-bridge-work"
+    return run_codex_task(
+        auftrag=auftrag,
+        repo=fm.get("repo", ""),
+        base_branch=fm.get("base_branch", "main"),
+        task_id=task_id,
+        workroot=wr,
+        codex_bin=os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None,
+        timeout=int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600")),
+    )
+
+
+register_runner("codex", _codex_runner)

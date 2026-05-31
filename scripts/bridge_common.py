@@ -43,28 +43,87 @@ def bridge_root() -> Path:
     return root
 
 
+# --- Endpoints & lanes -------------------------------------------------------
+# Two endpoints, one human -> a static dict is enough (no config file/YAML).
+# Each endpoint sends into the outbox of its OUTGOING lane and polls the outbox
+# of every lane where it is the RECEIVER. Direction-separated lanes mean two
+# active pollers (A and B) never share a claim pool -> the documented
+# cross-device rename race (os.rename is only LOCAL-atomic) cannot occur.
+ENDPOINTS = {
+    "claude@laptop-a": {"sends_on": "A-to-B", "receives_on": ["B-to-A"]},
+    "codex@laptop-b":  {"sends_on": "B-to-A", "receives_on": ["A-to-B"]},
+}
+DEFAULT_LANE = "A-to-B"  # legacy / Stage-1 direction
+
+
+def this_endpoint() -> str:
+    """Who am I. DUAL_BRIDGE_ENDPOINT overrides; default is the A/Claude node."""
+    return os.environ.get("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+
+
+def lane_root(lane: str) -> Path:
+    return bridge_root() / f"lane-{lane}"
+
+
+def lane_outbox(lane: str) -> Path:
+    return lane_root(lane) / "outbox"
+
+
+def lane_inbox(lane: str) -> Path:
+    return lane_root(lane) / "inbox"
+
+
+def lane_processed(lane: str) -> Path:
+    return lane_root(lane) / "_processed"
+
+
+def lane_errors(lane: str) -> Path:
+    # Quarantine for malformed/hostile task files — kept OUT of ensure_dirs()
+    # and separate from _processed/ so it is visibly not-normal. Created lazily
+    # by the poller (handoff_poll) when something actually needs quarantining.
+    return lane_root(lane) / "_errors"
+
+
+def _endpoint_cfg(endpoint: str | None) -> dict:
+    ep = endpoint or this_endpoint()
+    try:
+        return ENDPOINTS[ep]
+    except KeyError:
+        raise ValueError(
+            f"Unbekannter Endpoint {ep!r}. Erlaubt: {', '.join(ENDPOINTS)}"
+        ) from None
+
+
+def send_lane(endpoint: str | None = None) -> str:
+    return _endpoint_cfg(endpoint)["sends_on"]
+
+
+def receive_lanes(endpoint: str | None = None) -> list[str]:
+    return list(_endpoint_cfg(endpoint)["receives_on"])
+
+
+# --- Legacy helpers (default lane) — keep Stage-0/1 tests green --------------
 def outbox_dir() -> Path:
-    return bridge_root() / "outbox"
+    return lane_outbox(DEFAULT_LANE)
 
 
 def inbox_dir() -> Path:
-    return bridge_root() / "inbox"
+    return lane_inbox(DEFAULT_LANE)
 
 
 def processed_dir() -> Path:
-    return bridge_root() / "_processed"
+    return lane_processed(DEFAULT_LANE)
 
 
 def errors_dir() -> Path:
-    """Quarantine for malformed/hostile task files (invalid task_id, corrupt
-    frontmatter). Kept separate from _processed/ so it is visibly not-normal."""
-    return bridge_root() / "_errors"
+    return lane_errors(DEFAULT_LANE)
 
 
 def ensure_dirs() -> None:
-    """Create the three bridge subdirs if missing (idempotent)."""
-    for d in (outbox_dir(), inbox_dir(), processed_dir()):
-        d.mkdir(parents=True, exist_ok=True)
+    """Create outbox/inbox/_processed for every known lane (idempotent)."""
+    for lane in {DEFAULT_LANE, *(_e["sends_on"] for _e in ENDPOINTS.values())}:
+        for d in (lane_outbox(lane), lane_inbox(lane), lane_processed(lane)):
+            d.mkdir(parents=True, exist_ok=True)
 
 
 # --- Time / id helpers -------------------------------------------------------

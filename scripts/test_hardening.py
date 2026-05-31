@@ -73,7 +73,7 @@ def test_f4_stranded_claim_gets_archived() -> None:
     # Its result already exists (it was written before the move failed).
     bc.write_text_utf8(bc.inbox_dir() / f"result-{task_id}.md", "done earlier")
 
-    n = hp.poll_once()
+    n = hp._poll_lane(bc.DEFAULT_LANE)
     assert n == 0, "Stranded-Task darf NICHT als neu verarbeitet zählen"
     assert not stranded.exists(), "Stranded-Task wurde nicht aus outbox archiviert"
     assert (bc.processed_dir() / stranded.name).exists(), "Stranded-Task nicht in _processed"
@@ -103,7 +103,7 @@ def test_p0_open_claim_without_result_is_not_lost() -> None:
     stranded = bc.outbox_dir() / f"task-{task_id}.claimed-TESTDEV-deadbeef.md"
     bc.write_text_utf8(stranded, bc.build_document(fm, "## Auftrag\nbearbeite mich\n"))
 
-    hp.poll_once()
+    hp._poll_lane(bc.DEFAULT_LANE)
 
     # The crashed claim's exact filename must NOT end up in _processed/ — that
     # would be the silent loss (archived without ever being answered).
@@ -179,7 +179,7 @@ def test_poll_skips_task_with_bad_id() -> None:
     task = bc.outbox_dir() / f"task-{safe_name_id}.md"
     bc.write_text_utf8(task, bc.build_document(fm, "## Auftrag\nx\n"))
 
-    produced = hp.process_one(task)
+    produced = hp.process_one(task, lane=bc.DEFAULT_LANE)
     assert produced is False, "Task mit ungültiger task_id darf nicht verarbeitet werden"
     # No result anywhere outside the inbox (traversal) and none for the evil id.
     assert not (bc.inbox_dir() / "result-../evil.md").exists()
@@ -210,7 +210,7 @@ def test_recovery_validates_task_id() -> None:
     stranded = bc.outbox_dir() / f"task-{safe_name_id}.claimed-X-12345678.md"
     bc.write_text_utf8(stranded, bc.build_document(fm, "## Auftrag\nx\n"))
 
-    hp.poll_once()
+    hp._poll_lane(bc.DEFAULT_LANE)
 
     # No traversal artifact anywhere under the bridge root, and no requeued/result
     # file built from the evil id.
@@ -278,7 +278,7 @@ def test_f1_double_claim_one_result() -> None:
     pre_existing = bc.inbox_dir() / f"result-{task_id}.md"
     bc.write_text_utf8(pre_existing, "result vom anderen worker")
 
-    produced = hp.process_one(task)
+    produced = hp.process_one(task, lane=bc.DEFAULT_LANE)
     assert produced is False, "process_one hätte bei existierendem Result bailen müssen"
     assert pre_existing.read_text(encoding="utf-8-sig") == "result vom anderen worker", \
         "Bestehendes Result wurde überschrieben!"
