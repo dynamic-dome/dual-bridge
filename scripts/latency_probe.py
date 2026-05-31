@@ -98,7 +98,8 @@ def _archive_result(task_id: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Measure A->B->A roundtrip latency.")
+    parser = argparse.ArgumentParser(
+        description="Measure send-lane roundtrip latency (endpoint-relative).")
     parser.add_argument("--count", type=int, default=5, help="Number of probes.")
     parser.add_argument("--gap", type=float, default=1.0, help="Seconds between probes.")
     parser.add_argument(
