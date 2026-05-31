@@ -71,6 +71,15 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
                             error_text="claude nicht gefunden — installiert/im PATH?")
     cwd = str(workroot) if workroot is not None else None
     env = dict(os.environ)
+    # DCO brain.py leak pattern (verified live on B 2026-05-31): an inherited,
+    # INVALID ANTHROPIC_API_KEY in the env takes precedence over the Claude
+    # subscription login and makes `claude -p` answer "Invalid API key" (exit 1).
+    # The reviewer must run on the SUBSCRIPTION, so drop any inherited key (and
+    # the alternate auth-token var) from the subprocess env. Removing it forces
+    # claude to use the local subscription login. Verified: key set -> Invalid;
+    # key removed -> clean answer.
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
     # CLAUDE_CODE_DISABLE_HOOKS=1 is DEPRECATED and no longer suppresses
     # prompt-based Stop/SessionEnd hooks in headless `-p` mode (verified live
     # 2026-05-31: the bridge reviewer crashed with exit 1 "Prompt stop hooks are

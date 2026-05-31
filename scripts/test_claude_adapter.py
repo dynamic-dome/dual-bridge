@@ -107,19 +107,22 @@ def test_run_claude_nonzero_exit_without_answer_is_error() -> None:
     print("  claude OK — nonzero exit + empty answer -> error")
 
 
-def _write_argdump_claude(tmp: Path) -> tuple[str, Path]:
-    """A fake claude that dumps its argv to a file, then emits a valid result.
-    Lets us assert which flags the adapter passes (hook-disable hardening)."""
+def _write_argdump_claude(tmp: Path) -> tuple[str, Path, Path]:
+    """A fake claude that dumps its argv AND its ANTHROPIC_API_KEY env to files,
+    then emits a valid result. Lets us assert which flags the adapter passes
+    (hook-disable) and that no inherited API key reaches the subprocess."""
     bindir = tmp / "fakebin"; bindir.mkdir(parents=True, exist_ok=True)
     argfile = tmp / "argv.txt"
+    envfile = tmp / "env_key.txt"
     py = bindir / "fake_claude.py"
     py.write_text(
-        "import sys, json\n"
+        "import sys, os, json\n"
         "try:\n"
         "    sys.stdout.reconfigure(encoding='utf-8')\n"
         "except Exception:\n"
         "    pass\n"
         f"open(r{str(argfile)!r}, 'w', encoding='utf-8').write('\\n'.join(sys.argv[1:]))\n"
+        f"open(r{str(envfile)!r}, 'w', encoding='utf-8').write(os.environ.get('ANTHROPIC_API_KEY', '<UNSET>'))\n"
         "sys.stdout.write('\\ufeff' + json.dumps([{'type':'result','result':'ok'}]) + '\\n')\n"
         "sys.exit(0)\n",
         encoding="utf-8",
@@ -132,7 +135,7 @@ def _write_argdump_claude(tmp: Path) -> tuple[str, Path]:
         os.chmod(sh, 0o755)
     except OSError:
         pass
-    return str(bindir / ("claude.cmd" if os.name == "nt" else "claude")), argfile
+    return str(bindir / ("claude.cmd" if os.name == "nt" else "claude")), argfile, envfile
 
 
 def test_run_claude_disables_hooks() -> None:
@@ -145,7 +148,7 @@ def test_run_claude_disables_hooks() -> None:
     import claude_adapter as ca
     importlib.reload(ca)
     tmp = Path(tempfile.mkdtemp(prefix="claude-hooks-"))
-    fake, argfile = _write_argdump_claude(tmp)
+    fake, argfile, _ = _write_argdump_claude(tmp)
     r = ca.run_claude(auftrag="review", fm={"task_id": "T1"}, workroot=tmp,
                       claude_bin=fake)
     assert r.status == "done", f"expected done, got {r.status}: {r.error_text}"
@@ -156,11 +159,38 @@ def test_run_claude_disables_hooks() -> None:
     print("  claude OK — passes --settings disableAllHooks (hook-disable hardening)")
 
 
+def test_run_claude_drops_inherited_api_key() -> None:
+    """Live Phase-6 finding (DCO brain.py leak pattern): an inherited, INVALID
+    ANTHROPIC_API_KEY in the env takes precedence over the subscription login and
+    makes `claude -p` answer 'Invalid API key'. Verified on B: key set -> exit 1
+    Invalid; key removed -> exit 0. The reviewer must run on the subscription, so
+    the adapter MUST drop ANTHROPIC_API_KEY from the subprocess env."""
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-key-"))
+    fake, _, envfile = _write_argdump_claude(tmp)
+    old = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = "sk-ant-INVALID-should-not-reach-subprocess"
+    try:
+        r = ca.run_claude(auftrag="review", fm={"task_id": "T1"}, workroot=tmp,
+                          claude_bin=fake)
+    finally:
+        if old is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = old
+    assert r.status == "done", f"expected done, got {r.status}: {r.error_text}"
+    seen = envfile.read_text(encoding="utf-8")
+    assert seen == "<UNSET>", f"adapter leaked ANTHROPIC_API_KEY to subprocess: {seen!r}"
+    print("  claude OK — drops inherited ANTHROPIC_API_KEY (subscription, not key)")
+
+
 def main() -> int:
     print("=== Stage-2a Claude-Adapter-Tests ===")
     tests = [test_parse_event_stream_with_hook_noise, test_parse_empty_is_empty,
              test_run_claude_happy, test_run_claude_not_found,
              test_run_claude_disables_hooks,
+             test_run_claude_drops_inherited_api_key,
              test_run_claude_nonzero_exit_with_valid_answer_is_done,
              test_run_claude_nonzero_exit_without_answer_is_error]
     failed = 0
