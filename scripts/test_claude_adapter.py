@@ -77,10 +77,60 @@ def test_run_claude_not_found() -> None:
     print("  claude OK — missing binary -> status:error (no raise)")
 
 
+def _write_argdump_claude(tmp: Path) -> tuple[str, Path]:
+    """A fake claude that dumps its argv to a file, then emits a valid result.
+    Lets us assert which flags the adapter passes (hook-disable hardening)."""
+    bindir = tmp / "fakebin"; bindir.mkdir(parents=True, exist_ok=True)
+    argfile = tmp / "argv.txt"
+    py = bindir / "fake_claude.py"
+    py.write_text(
+        "import sys, json\n"
+        "try:\n"
+        "    sys.stdout.reconfigure(encoding='utf-8')\n"
+        "except Exception:\n"
+        "    pass\n"
+        f"open(r{str(argfile)!r}, 'w', encoding='utf-8').write('\\n'.join(sys.argv[1:]))\n"
+        "sys.stdout.write('\\ufeff' + json.dumps([{'type':'result','result':'ok'}]) + '\\n')\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    cmd = bindir / "claude.cmd"
+    cmd.write_text(f'@echo off\r\npython "{py}" %*\r\n', encoding="utf-8")
+    sh = bindir / "claude"
+    sh.write_text(f'#!/bin/sh\nexec python "{py}" "$@"\n', encoding="utf-8")
+    try:
+        os.chmod(sh, 0o755)
+    except OSError:
+        pass
+    return str(bindir / ("claude.cmd" if os.name == "nt" else "claude")), argfile
+
+
+def test_run_claude_disables_hooks() -> None:
+    """Live Phase-6 finding: a prompt-based Stop/SessionEnd hook in the user's
+    global settings crashes `claude -p` with exit 1 ('Prompt stop hooks are not
+    yet supported outside REPL'). CLAUDE_CODE_DISABLE_HOOKS is deprecated and no
+    longer suppresses it. The adapter MUST pass --settings {"disableAllHooks":
+    true} so the headless reviewer runs hook-free."""
+    import json as _json
+    import claude_adapter as ca
+    importlib.reload(ca)
+    tmp = Path(tempfile.mkdtemp(prefix="claude-hooks-"))
+    fake, argfile = _write_argdump_claude(tmp)
+    r = ca.run_claude(auftrag="review", fm={"task_id": "T1"}, workroot=tmp,
+                      claude_bin=fake)
+    assert r.status == "done", f"expected done, got {r.status}: {r.error_text}"
+    argv = argfile.read_text(encoding="utf-8").splitlines()
+    assert "--settings" in argv, f"--settings missing from argv: {argv}"
+    settings_val = argv[argv.index("--settings") + 1]
+    assert _json.loads(settings_val).get("disableAllHooks") is True, settings_val
+    print("  claude OK — passes --settings disableAllHooks (hook-disable hardening)")
+
+
 def main() -> int:
     print("=== Stage-2a Claude-Adapter-Tests ===")
     tests = [test_parse_event_stream_with_hook_noise, test_parse_empty_is_empty,
-             test_run_claude_happy, test_run_claude_not_found]
+             test_run_claude_happy, test_run_claude_not_found,
+             test_run_claude_disables_hooks]
     failed = 0
     for t in tests:
         try:

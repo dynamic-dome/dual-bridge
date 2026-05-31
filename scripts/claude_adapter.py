@@ -71,8 +71,18 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
                             error_text="claude nicht gefunden — installiert/im PATH?")
     cwd = str(workroot) if workroot is not None else None
     env = dict(os.environ)
+    # CLAUDE_CODE_DISABLE_HOOKS=1 is DEPRECATED and no longer suppresses
+    # prompt-based Stop/SessionEnd hooks in headless `-p` mode (verified live
+    # 2026-05-31: the bridge reviewer crashed with exit 1 "Prompt stop hooks are
+    # not yet supported outside REPL" because of a global wrap-up Stop hook).
+    # Kept for older CLIs that still honour it, but the real fix is the
+    # --settings override below.
     env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
-    cmd = [exe, "-p", "--output-format", "json", auftrag]
+    # Authoritative hook-disable for current Claude Code (v2.1+): an inline
+    # settings override turns off ALL hooks for this headless run, so a
+    # user-configured Stop/SessionEnd hook can never break the reviewer.
+    cmd = [exe, "-p", "--output-format", "json",
+           "--settings", '{"disableAllHooks": true}', auftrag]
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                               encoding="utf-8", stdin=subprocess.DEVNULL,
