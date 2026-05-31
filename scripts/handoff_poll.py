@@ -25,10 +25,43 @@ CODEX_WORKROOT = bc.Path(
     os.environ.get("DUAL_BRIDGE_WORKROOT") or (bc.Path.home() / "dual-bridge-work")
 )
 
+# GT1: gate-evidence fields that are mirrored verbatim from a task's frontmatter
+# into the result's frontmatter when present. The later gate needs gate_id/run_id/
+# stage threaded through the echo path. Mirroring is additive and absent-safe.
+MIRROR_FIELDS = ("gate_id", "run_id", "stage")
+
 
 def _is_conflict_copy(name: str) -> bool:
     """Google-Drive conflict copies look like 'task-... (1).md'. Skip them."""
     return "(" in name and ")" in name
+
+
+def parse_verdict(text: str) -> tuple[str, str]:
+    """Extract a review verdict from a reviewer's answer (Stage-2b core).
+
+    Convention: the reviewer ends with a line `VERDICT: accepted` or
+    `VERDICT: rejected` (case-insensitive; the LAST such line wins). Returns
+    (verdict, reason).
+
+    FAIL-CLOSED (PFLICHT): no marker, empty text, or any unrecognised verdict
+    token resolves to ("rejected", <reason>). A review NEVER auto-accepts on
+    ambiguity — only an explicit `accepted` marker yields "accepted".
+    """
+    if not text or not text.strip():
+        return ("rejected", "empty reviewer answer")
+    found: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if low.startswith("verdict:"):
+            found = stripped.split(":", 1)[1].strip().lower()
+    if found is None:
+        return ("rejected", "no VERDICT marker found")
+    if found == "accepted":
+        return ("accepted", "")
+    if found == "rejected":
+        return ("rejected", "")
+    return ("rejected", f"unrecognised verdict token: {found!r}")
 
 
 def _build_result_fm(fm: dict, result, task_id: str, adapter: str) -> dict:
@@ -50,6 +83,17 @@ def _build_result_fm(fm: dict, result, task_id: str, adapter: str) -> dict:
         result_fm["branch"] = result.branch
     if result.commit:
         result_fm["commit"] = result.commit
+    # Review verdict is RUNNER output (not a task echo) -> fixed path, NOT via
+    # MIRROR_FIELDS. Present only when the review path set it on the result.
+    if result.verdict:
+        result_fm["verdict"] = result.verdict
+        if result.verdict_reason:
+            result_fm["verdict_reason"] = result.verdict_reason
+    # GT1: thread gate-evidence fields through verbatim — only when present and
+    # non-empty in the task FM (never inject an empty `gate_id: ""`).
+    for k in MIRROR_FIELDS:
+        if k in fm and fm[k] not in (None, ""):
+            result_fm[k] = fm[k]
     return result_fm
 
 
@@ -94,6 +138,12 @@ def process_one(task_path: bc.Path, lane: str) -> bool:
         except Exception as exc:  # noqa: BLE001 -- a runner must never crash the poller
             result = runners.RunnerResult(status="error",
                                           error_text=f"{adapter} runner crash: {type(exc).__name__}: {exc}")
+
+    # Stage-2b: review kind gets accepted/rejected verdict semantics. Verdict
+    # extraction lives in this review-specific path (NOT in the generic
+    # claude runner, which is shared by implement/research). Fail-closed.
+    if fm.get("kind") == "review" and result.status == "done":
+        result.verdict, result.verdict_reason = parse_verdict(result.antwort)
 
     fm["status"] = result.status
     result_fm = _build_result_fm(fm, result, task_id, adapter)
