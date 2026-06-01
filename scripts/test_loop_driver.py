@@ -70,6 +70,7 @@ def test_loop_payload_is_runner_output(monkeypatch):
                                  "payload": "5"}, "5")
     handoff_poll.poll_once()
     result = bc.lane_inbox(lane) / f"result-{task_id}.md"
+    assert result.exists()
     fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
     assert fm.get("payload") == "6"   # 5 + 1
 
@@ -85,5 +86,25 @@ def test_non_loop_task_has_no_payload(monkeypatch):
     task_id = _write_task(lane, {"adapter": "echo"}, "hallo")
     handoff_poll.poll_once()
     result = bc.lane_inbox(lane) / f"result-{task_id}.md"
+    assert result.exists()
     fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
+    assert "payload" not in fm
+
+
+def test_loop_task_with_runner_error_has_no_payload(monkeypatch):
+    """Ein Loop-Task, dessen Runner fehlschlägt (status:error), bekommt KEIN payload."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "codex@laptop-b")
+    import importlib
+    importlib.reload(bc)
+    import handoff_poll
+    importlib.reload(handoff_poll)
+    lane = "A-to-B"
+    # increment runner errors on a non-numeric payload
+    task_id = _write_task(lane, {"loop_id": "loop-err", "round": "0",
+                                 "payload": "abc"}, "abc")
+    handoff_poll.poll_once()
+    result = bc.lane_inbox(lane) / f"result-{task_id}.md"
+    assert result.exists()
+    fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
+    assert fm.get("status") == "error"
     assert "payload" not in fm
