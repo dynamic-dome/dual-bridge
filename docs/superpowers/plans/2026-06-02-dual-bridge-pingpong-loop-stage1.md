@@ -881,9 +881,15 @@ notieren. Bei Abweichung (Timeout, payload-Drift) NICHT als Erfolg melden — Bu
 
 ## Notes für den ausführenden Worker
 
-- **Test-Isolation (Pflicht, globale Regel 3):** Die Tests laufen über `scripts/conftest.py`
-  (Env-Snapshot + Runner-Re-Register) und `--basetemp`. Sie schreiben NUR in tmp und das
-  per `monkeypatch.setattr` umgebogene `STATE_DIR`. Niemals gegen das echte Drive testen.
+- **Test-Isolation (Pflicht, globale Regel 3) — UPDATE 2026-06-02:** `scripts/conftest.py`
+  wurde gehärtet (Commit `ff70df3`): die autouse-Fixture setzt `DUAL_BRIDGE_ROOT` jetzt
+  ZWANGSWEISE auf ein frisches per-Test-tmp (`tmp_path_factory`) und hat einen Poison-Guard
+  (RuntimeError, falls der Root je `dynamic_sharepoint` enthält, vor + nach jedem Test).
+  Grund: vorher setzte conftest das Root NICHT → ein Test ohne eigenen Override schrieb ins
+  echte Google Drive (Vorfall behoben, [[wiki/todos/2026-06-02-dual-bridge-test-drive-leak]]).
+  Konsequenz für diese Tasks: Tests müssen `DUAL_BRIDGE_ROOT` NICHT mehr selbst setzen — die
+  conftest erledigt es. `STATE_DIR` wird weiterhin per `monkeypatch.setattr(loop_driver,
+  "STATE_DIR", tmp_path)` isoliert (Tasks 6/7). Niemals gegen das echte Drive testen.
 - **Reload-Muster:** Mehrere Tests reloaden `bc`/`handoff_poll`/`loop_driver` nach
   `DUAL_BRIDGE_ENDPOINT`-Wechsel, weil `this_endpoint()`/`send_lane()` beim Import aufgelöst
   werden. Das `conftest.py` re-registriert Runner nach reload (sonst Runner-Registry-Leak,
