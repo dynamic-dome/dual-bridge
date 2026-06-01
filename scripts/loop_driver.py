@@ -48,26 +48,33 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
 
 
 def _is_conflict_copy(name: str) -> bool:
+    # Same heuristic as handoff_poll._is_conflict_copy / handoff_collect.
     return "(" in name and ")" in name
 
 
-def wait_for_result(task_id: str, timeout: int, interval: int = 5):
+def wait_for_result(task_id: str, timeout: int, interval: float = 5):
     """Poll THIS endpoint's receive-lane inbox for result-<task_id>.md until it
     appears or `timeout` seconds elapse. Returns the result frontmatter dict, or
-    None on timeout. Drive conflict copies ('(1)') are ignored. Archives the
-    consumed result into _processed/ so it is not re-read next round."""
+    None on timeout. Checks at least once (so timeout=0 still inspects). Drive
+    conflict copies ('(1)') are ignored. A half-written file (frontmatter parsed
+    but no task_id yet — a real risk on slow Drive sync) is treated as a miss and
+    polling continues, never returned as an empty hit. On a real hit the file is
+    archived into _processed/ so it is not re-read next round (best-effort)."""
     lane = bc.receive_lanes()[0]
     target_name = f"result-{task_id}.md"
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    while True:
         path = bc.lane_inbox(lane) / target_name
         if path.exists() and not _is_conflict_copy(path.name):
             fm, _ = bc.parse_frontmatter(bc.read_text_utf8(path))
-            try:
-                (bc.lane_processed(lane) / target_name).unlink(missing_ok=True)
-                path.replace(bc.lane_processed(lane) / target_name)
-            except OSError:
-                pass  # best-effort archive; we already have the fm
-            return fm
+            if fm.get("task_id"):  # complete file — a real hit
+                try:
+                    (bc.lane_processed(lane) / target_name).unlink(missing_ok=True)
+                    path.replace(bc.lane_processed(lane) / target_name)
+                except OSError:
+                    pass  # best-effort archive; we already have the fm
+                return fm
+            # else: half-written, keep waiting
+        if time.monotonic() >= deadline:
+            return None
         time.sleep(interval)
-    return None

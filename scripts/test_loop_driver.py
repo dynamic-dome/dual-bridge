@@ -157,6 +157,8 @@ def test_wait_for_result_returns_fm(monkeypatch):
     fm = loop_driver.wait_for_result(tid, timeout=5, interval=1)
     assert fm is not None
     assert fm["payload"] == "9"
+    assert not (bc.lane_inbox(lane) / f"result-{tid}.md").exists()
+    assert (bc.lane_processed(lane) / f"result-{tid}.md").exists()
 
 
 def test_wait_for_result_times_out(monkeypatch):
@@ -169,3 +171,37 @@ def test_wait_for_result_times_out(monkeypatch):
     fm = loop_driver.wait_for_result("20260101-000000-000000-0-aaaa",
                                      timeout=2, interval=1)
     assert fm is None
+
+
+def test_wait_for_result_ignores_conflict_copy(monkeypatch):
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    bc.ensure_dirs()
+    lane = bc.receive_lanes()[0]
+    tid = bc.make_task_id()
+    # A Google-Drive conflict copy of the result must be ignored.
+    fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+          "to": "claude@laptop-a", "status": "done", "task_id": tid,
+          "payload": "9"}
+    bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{tid} (1).md",
+                       bc.build_document(fm, "## Antwort\nok\n"))
+    assert loop_driver.wait_for_result(tid, timeout=2, interval=1) is None
+
+
+def test_wait_for_result_ignores_half_written(monkeypatch):
+    """Eine halb-geschriebene Result-Datei (FM ohne task_id) ist KEIN Hit."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    bc.ensure_dirs()
+    lane = bc.receive_lanes()[0]
+    tid = bc.make_task_id()
+    # No closing fence / no task_id -> parse_frontmatter yields {} or no task_id.
+    bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{tid}.md",
+                       "---\ncreated: x\n")  # truncated, no closing ---
+    assert loop_driver.wait_for_result(tid, timeout=2, interval=1) is None
