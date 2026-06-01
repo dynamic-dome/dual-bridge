@@ -28,7 +28,7 @@ CODEX_WORKROOT = bc.Path(
 # GT1: gate-evidence fields that are mirrored verbatim from a task's frontmatter
 # into the result's frontmatter when present. The later gate needs gate_id/run_id/
 # stage threaded through the echo path. Mirroring is additive and absent-safe.
-MIRROR_FIELDS = ("gate_id", "run_id", "stage")
+MIRROR_FIELDS = ("gate_id", "run_id", "stage", "loop_id", "round")
 
 
 def _is_conflict_copy(name: str) -> bool:
