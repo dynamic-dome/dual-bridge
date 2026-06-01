@@ -1,10 +1,10 @@
-# diagnose-codex-sandbox-B.ps1  (v2 — robust gegen den npm .ps1-Wrapper)
+# diagnose-codex-sandbox-B.ps1  (v2 - robust gegen den npm .ps1-Wrapper)
 # Self-diagnosing check for the codex worker on Laptop B.
 #
 # Triggered by two live findings 2026-05-31:
 #   (1) codex returned "windows sandbox: spawn setup refresh" under
 #       -s workspace-write on the first real implement task, and
-#   (2) codex is installed as codex.ps1 (npm pwsh wrapper) — Python subprocess
+#   (2) codex is installed as codex.ps1 (npm pwsh wrapper) - Python subprocess
 #       (the real adapter path) cannot launch a .ps1 directly (global rule 10.2).
 #
 # This script does NOT use `cmd /c` against the .ps1 (that was the v1 bug that
@@ -73,7 +73,7 @@ function Probe($mode) {
     # Pipe the prompt on stdin to the .cmd shim. & with a here-string via Write-Output.
     # --skip-git-repo-check: the probe workdir is a throwaway temp dir, NOT a git
     # repo, so codex 0.135 would otherwise refuse with "Not inside a trusted
-    # directory" — which is a PROBE artefact, not a sandbox problem. The real
+    # directory" - which is a PROBE artefact, not a sandbox problem. The real
     # adapter clones a repo and passes this same flag (codex_adapter.py), so the
     # honest probe must pass it too.
     "Reply with exactly PONG and change no files." |
@@ -109,6 +109,6 @@ Write-Output "  - PY_SUBPROCESS_LAUNCH=OK und alle PROBE_* OK -> codex ist gesun
 Write-Output "    Adapter-Pfad (klont Repo + --skip-git-repo-check) laeuft. KEIN B-Blocker mehr."
 Write-Output "  - PROBE_* = SANDBOX-REFRESH-ERROR (spawn setup refresh) -> echtes codex-Sandbox-"
 Write-Output "    Problem im write-Modus -> codex updaten / danger-full. (NICHT die Trusted-Dir-"
-Write-Output "    Meldung — die war ein Probe-Artefakt vor dem --skip-git-repo-check-Fix.)"
+Write-Output "    Meldung war ein Probe-Artefakt vor dem --skip-git-repo-check-Fix.)"
 Write-Output ""
 Write-Output "=== ENDE DIAGNOSE v2 ==="
