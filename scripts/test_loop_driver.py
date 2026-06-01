@@ -131,3 +131,41 @@ def test_driver_writes_loop_task(monkeypatch):
     assert fm["task_id"] == task_id
     assert fm["from"] == "claude@laptop-a"
     assert fm["to"] == "codex@laptop-b"
+
+
+def _write_result(lane: str, task_id: str, fm_extra: dict, status="done"):
+    fm = {"created": bc.now_iso(), "agent": "codex@laptop-b",
+          "from": "codex@laptop-b", "to": "claude@laptop-a",
+          "purpose": "handoff", "status": status, "task_id": task_id,
+          "kind": "echo", "adapter": "increment",
+          "replies_to": f"task-{task_id}.md"}
+    fm.update(fm_extra)
+    bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                       bc.build_document(fm, "## Antwort\nok\n"))
+
+
+def test_wait_for_result_returns_fm(monkeypatch):
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    bc.ensure_dirs()
+    lane = bc.receive_lanes()[0]  # B-to-A
+    tid = bc.make_task_id()
+    _write_result(lane, tid, {"payload": "9"})
+    fm = loop_driver.wait_for_result(tid, timeout=5, interval=1)
+    assert fm is not None
+    assert fm["payload"] == "9"
+
+
+def test_wait_for_result_times_out(monkeypatch):
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    bc.ensure_dirs()
+    fm = loop_driver.wait_for_result("20260101-000000-000000-0-aaaa",
+                                     timeout=2, interval=1)
+    assert fm is None

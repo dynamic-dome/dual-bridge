@@ -45,3 +45,29 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
     bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
                        bc.build_document(fm, body))
     return task_id
+
+
+def _is_conflict_copy(name: str) -> bool:
+    return "(" in name and ")" in name
+
+
+def wait_for_result(task_id: str, timeout: int, interval: int = 5):
+    """Poll THIS endpoint's receive-lane inbox for result-<task_id>.md until it
+    appears or `timeout` seconds elapse. Returns the result frontmatter dict, or
+    None on timeout. Drive conflict copies ('(1)') are ignored. Archives the
+    consumed result into _processed/ so it is not re-read next round."""
+    lane = bc.receive_lanes()[0]
+    target_name = f"result-{task_id}.md"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        path = bc.lane_inbox(lane) / target_name
+        if path.exists() and not _is_conflict_copy(path.name):
+            fm, _ = bc.parse_frontmatter(bc.read_text_utf8(path))
+            try:
+                (bc.lane_processed(lane) / target_name).unlink(missing_ok=True)
+                path.replace(bc.lane_processed(lane) / target_name)
+            except OSError:
+                pass  # best-effort archive; we already have the fm
+            return fm
+        time.sleep(interval)
+    return None
