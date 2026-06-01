@@ -71,8 +71,13 @@ function Probe($mode) {
     $ans = Join-Path $env:TEMP ("ans-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
     $err = Join-Path $env:TEMP ("err-" + [Guid]::NewGuid().ToString("N").Substring(0,6) + ".txt")
     # Pipe the prompt on stdin to the .cmd shim. & with a here-string via Write-Output.
+    # --skip-git-repo-check: the probe workdir is a throwaway temp dir, NOT a git
+    # repo, so codex 0.135 would otherwise refuse with "Not inside a trusted
+    # directory" — which is a PROBE artefact, not a sandbox problem. The real
+    # adapter clones a repo and passes this same flag (codex_adapter.py), so the
+    # honest probe must pass it too.
     "Reply with exactly PONG and change no files." |
-        & $codexCmdShim exec -C $work -s $mode -o $ans - 2> $err | Out-Null
+        & $codexCmdShim exec -C $work -s $mode --skip-git-repo-check -o $ans - 2> $err | Out-Null
     $code = $LASTEXITCODE
     $etxt = if (Test-Path $err) { (Get-Content $err -Raw -ErrorAction SilentlyContinue) } else { "" }
     Remove-Item $err -Force -ErrorAction SilentlyContinue
@@ -97,11 +102,13 @@ Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Output ""
 Write-Output "Deutung:"
-Write-Output "  - PY_WHICH endet auf .ps1 UND PY_SUBPROCESS_LAUNCH=FAIL -> ECHTE WURZEL:"
-Write-Output "    der Adapter erwischt den .ps1-Wrapper, den Python nicht starten kann."
-Write-Output "    Fix gehoert in den Adapter (codex.cmd bevorzugen). Kein Sandbox-Problem."
-Write-Output "  - PY_SUBPROCESS_LAUNCH=OK aber PROBE_WORKSPACE_WRITE=SANDBOX-REFRESH-ERROR:"
-Write-Output "    echtes codex-Sandbox-Problem im write-Modus -> codex updaten / danger-full."
-Write-Output "  - alle PROBE_* OK -> war transient, Task neu fahren."
+Write-Output "  - PY_WHICH endet auf .ps1 UND PY_SUBPROCESS_LAUNCH=FAIL -> der Adapter"
+Write-Output "    erwischt den .ps1-Wrapper, den Python nicht starten kann. Fix im Adapter"
+Write-Output "    (codex.cmd bevorzugen). [2026-06-01: auf B widerlegt, PY_WHICH=.CMD, LAUNCH=OK]"
+Write-Output "  - PY_SUBPROCESS_LAUNCH=OK und alle PROBE_* OK -> codex ist gesund, der echte"
+Write-Output "    Adapter-Pfad (klont Repo + --skip-git-repo-check) laeuft. KEIN B-Blocker mehr."
+Write-Output "  - PROBE_* = SANDBOX-REFRESH-ERROR (spawn setup refresh) -> echtes codex-Sandbox-"
+Write-Output "    Problem im write-Modus -> codex updaten / danger-full. (NICHT die Trusted-Dir-"
+Write-Output "    Meldung — die war ein Probe-Artefakt vor dem --skip-git-repo-check-Fix.)"
 Write-Output ""
 Write-Output "=== ENDE DIAGNOSE v2 ==="
