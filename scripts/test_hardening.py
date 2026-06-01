@@ -31,6 +31,7 @@ def test_f2_unique_ids() -> None:
 def test_f2_exclusive_write() -> None:
     """F2/F1: exclusive write refuses to overwrite an existing file."""
     import bridge_common as bc
+    _fresh_bridge()
     bc.ensure_dirs()
     p = bc.outbox_dir() / "excl-test.md"
     assert bc.write_text_exclusive(p, "first") is True
@@ -42,6 +43,7 @@ def test_f2_exclusive_write() -> None:
 def test_f3_atomic_write() -> None:
     """F3: atomic write leaves no temp file behind and writes full content."""
     import bridge_common as bc
+    _fresh_bridge()
     bc.ensure_dirs()
     p = bc.outbox_dir() / "atomic-test.md"
     bc.write_text_atomic(p, "voller Inhalt mit Ümlaut")
@@ -57,6 +59,7 @@ def test_f4_stranded_claim_gets_archived() -> None:
     import importlib
     import bridge_common as bc
     importlib.reload(bc)
+    _fresh_bridge()
     import handoff_poll as hp
     importlib.reload(hp)
     bc.ensure_dirs()
