@@ -2,6 +2,7 @@
 DUAL_BRIDGE_ROOT auf tmp + re-registriert Runner)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import bridge_common as bc
@@ -205,3 +206,18 @@ def test_wait_for_result_ignores_half_written(monkeypatch):
     bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{tid}.md",
                        "---\ncreated: x\n")  # truncated, no closing ---
     assert loop_driver.wait_for_result(tid, timeout=2, interval=1) is None
+
+
+def test_append_state_writes_jsonl(tmp_path, monkeypatch):
+    import importlib
+    import loop_driver
+    importlib.reload(loop_driver)
+    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    loop_driver.append_state("loop-s", {"round": 0, "side": "B",
+                                        "payload_in": "1", "payload_out": "2",
+                                        "task_id": "t", "status": "done"})
+    f = tmp_path / "LOOP-loop-s.jsonl"
+    assert f.exists()
+    line = json.loads(f.read_text(encoding="utf-8").strip())
+    assert line["round"] == 0 and line["payload_out"] == "2"
+    assert "ts" in line  # Zeitstempel wird ergänzt

@@ -22,6 +22,16 @@ import claude_adapter  # noqa: F401
 STATE_DIR = Path(__file__).resolve().parent / "state"
 
 
+def append_state(loop_id: str, record: dict) -> None:
+    """Append one round record to scripts/state/LOOP-<loop_id>.jsonl (history,
+    A-side only). Adds an ISO timestamp. Append-only, never deletes."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    record = dict(record, ts=bc.now_iso())
+    path = STATE_DIR / f"LOOP-{loop_id}.jsonl"
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def write_round_task(loop_id: str, round_no: int, payload: str,
                      adapter: str) -> str:
     """Write an open loop task into THIS endpoint's send lane. Returns task_id."""
