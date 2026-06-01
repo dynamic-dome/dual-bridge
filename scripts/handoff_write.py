@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Base branch to start from (default: main).",
     )
     parser.add_argument("--adapter", default="echo",
-                        choices=["echo", "codex", "claude"],
+                        choices=["echo", "codex", "claude", "increment"],
                         help="Which runner the receiver should use.")
     parser.add_argument("--to", default="",
                         help="Target endpoint (default: the peer of my endpoint).")

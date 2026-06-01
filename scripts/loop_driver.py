@@ -175,3 +175,54 @@ def wait_for_result(task_id: str, timeout: int, interval: float = 5):
         if time.monotonic() >= deadline:
             return None
         time.sleep(interval)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Self-driving A<->B ping-pong loop (runs on Laptop A).")
+    parser.add_argument("--seed", default="0", help="Start payload (round 0 input).")
+    parser.add_argument("--max-rounds", type=int, required=True,
+                        help="Stop after exactly N rounds.")
+    parser.add_argument("--adapter", default="increment",
+                        choices=["echo", "increment", "codex", "claude"],
+                        help="Runner both sides use per round.")
+    parser.add_argument("--round-timeout", type=int, default=300,
+                        help="Max seconds to wait for B's result per round.")
+    parser.add_argument("--interval", type=int, default=5,
+                        help="Poll interval while waiting for a result.")
+    args = parser.parse_args(argv)
+
+    # Singleton: one loop driver per machine (reuses the poller lock pattern,
+    # local lock file, never the Drive root). Uses a loop-specific lock name.
+    lock = bc.default_lock_path().with_name("dual-bridge-loop.lock")
+    if not bc.acquire_singleton_lock(lock):
+        print("[A] Ein Loop-Treiber laeuft bereits -- ich beende mich.")
+        return 0
+
+    print(f"[A] Bridge-Root: {bc.bridge_root()}")
+    print(f"[A] Loop: seed={args.seed} max_rounds={args.max_rounds} "
+          f"adapter={args.adapter} round_timeout={args.round_timeout}s")
+    try:
+        summary = run_loop(seed=args.seed, max_rounds=args.max_rounds,
+                           adapter=args.adapter,
+                           round_timeout=args.round_timeout,
+                           interval=args.interval, b_tick=None)
+    except KeyboardInterrupt:
+        print("\n[A] Strg+C -- Loop abgebrochen.")
+        return 1
+
+    print("=" * 60)
+    print(f"[A] Loop {summary['loop_id']} fertig.")
+    print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
+    print(f"    Final-Payload: {summary['final_payload']}")
+    if summary["aborted"]:
+        print(f"    ABGEBROCHEN: {summary['abort_reason']}")
+        if summary["open_task_id"]:
+            print(f"    Offener Task (liegt in der Lane): {summary['open_task_id']}")
+    print(f"    History: {STATE_DIR / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+    print("=" * 60)
+    return 1 if summary["aborted"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
