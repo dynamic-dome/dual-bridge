@@ -56,3 +56,34 @@ def test_loop_id_and_round_are_mirrored(monkeypatch):
     fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
     assert fm.get("loop_id") == "loop-xyz"
     assert fm.get("round") == "2"
+
+
+def test_loop_payload_is_runner_output(monkeypatch):
+    """Result-FM payload muss der vom increment-Runner berechnete Wert sein."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "codex@laptop-b")
+    import importlib
+    importlib.reload(bc)
+    import handoff_poll
+    importlib.reload(handoff_poll)
+    lane = "A-to-B"
+    task_id = _write_task(lane, {"loop_id": "loop-pay", "round": "0",
+                                 "payload": "5"}, "5")
+    handoff_poll.poll_once()
+    result = bc.lane_inbox(lane) / f"result-{task_id}.md"
+    fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
+    assert fm.get("payload") == "6"   # 5 + 1
+
+
+def test_non_loop_task_has_no_payload(monkeypatch):
+    """Ein Task ohne loop_id bekommt KEIN payload-Feld ins Result (Bridge unberührt)."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "codex@laptop-b")
+    import importlib
+    importlib.reload(bc)
+    import handoff_poll
+    importlib.reload(handoff_poll)
+    lane = "A-to-B"
+    task_id = _write_task(lane, {"adapter": "echo"}, "hallo")
+    handoff_poll.poll_once()
+    result = bc.lane_inbox(lane) / f"result-{task_id}.md"
+    fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
+    assert "payload" not in fm

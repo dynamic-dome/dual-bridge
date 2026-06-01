@@ -94,6 +94,11 @@ def _build_result_fm(fm: dict, result, task_id: str, adapter: str) -> dict:
     for k in MIRROR_FIELDS:
         if k in fm and fm[k] not in (None, ""):
             result_fm[k] = fm[k]
+    # Loop envelope: a task that carries loop_id is part of a ping-pong loop.
+    # Its result payload is the RUNNER OUTPUT (the next value), not the echoed
+    # input. Only set when the task is a loop task AND the runner succeeded.
+    if fm.get("loop_id") and result.status == "done":
+        result_fm["payload"] = result.antwort.strip()
     return result_fm
 
 
