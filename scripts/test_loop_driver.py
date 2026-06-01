@@ -108,3 +108,23 @@ def test_loop_task_with_runner_error_has_no_payload(monkeypatch):
     fm, _ = bc.parse_frontmatter(bc.read_text_utf8(result))
     assert fm.get("status") == "error"
     assert "payload" not in fm
+
+
+def test_driver_writes_loop_task(monkeypatch):
+    """write_round_task schreibt einen Task mit korrektem Loop-Umschlag."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    task_id = loop_driver.write_round_task(
+        loop_id="loop-w", round_no=0, payload="7", adapter="increment")
+    lane = bc.send_lane()  # A-to-B
+    task = bc.lane_outbox(lane) / f"task-{task_id}.md"
+    assert task.exists()
+    fm, _ = bc.parse_frontmatter(bc.read_text_utf8(task))
+    assert fm["loop_id"] == "loop-w"
+    assert fm["round"] == "0"
+    assert fm["payload"] == "7"
+    assert fm["adapter"] == "increment"
+    assert fm["status"] == "open"
