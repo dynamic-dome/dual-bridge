@@ -62,6 +62,23 @@ def run_echo(auftrag: str, fm: dict, workroot: Path | None) -> RunnerResult:
     )
 
 
+def run_increment(auftrag: str, fm: dict, workroot: Path | None) -> RunnerResult:
+    """Stage-1 loop work: read the loop payload as an int and return +1.
+
+    The payload travels in fm['payload'] (the loop envelope). Falls back to
+    `auftrag` when fm has no payload (e.g. a plain CLI task). A non-numeric
+    payload is a hard error — never a silent default."""
+    raw = fm.get("payload", auftrag)
+    try:
+        nxt = int(str(raw).strip()) + 1
+    except (TypeError, ValueError):
+        return RunnerResult(
+            status="error",
+            error_text=f"increment: payload {raw!r} ist keine ganze Zahl",
+        )
+    return RunnerResult(status="done", antwort=str(nxt))
+
+
 # Populated here for echo; codex/claude register themselves via register_runner
 # from their own modules to avoid import cycles with bridge code.
 RUNNERS: dict[str, Callable[..., RunnerResult]] = {"echo": run_echo}
@@ -69,3 +86,6 @@ RUNNERS: dict[str, Callable[..., RunnerResult]] = {"echo": run_echo}
 
 def register_runner(name: str, fn: Callable[..., RunnerResult]) -> None:
     RUNNERS[name] = fn
+
+
+register_runner("increment", run_increment)
