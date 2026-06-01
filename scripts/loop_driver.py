@@ -188,8 +188,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Runner both sides use per round.")
     parser.add_argument("--round-timeout", type=int, default=300,
                         help="Max seconds to wait for B's result per round.")
-    parser.add_argument("--interval", type=int, default=5,
-                        help="Poll interval while waiting for a result.")
+    parser.add_argument("--interval", type=float, default=5.0,
+                        help="Poll interval seconds while waiting for a result.")
     args = parser.parse_args(argv)
 
     # Singleton: one loop driver per machine (reuses the poller lock pattern,
