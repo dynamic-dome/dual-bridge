@@ -152,7 +152,7 @@ def test_wait_for_result_returns_fm(monkeypatch):
     import loop_driver
     importlib.reload(loop_driver)
     bc.ensure_dirs()
-    lane = bc.receive_lanes()[0]  # B-to-A
+    lane = bc.send_lane()  # A-to-B — B writes results into the send lane's inbox
     tid = bc.make_task_id()
     _write_result(lane, tid, {"payload": "9"})
     fm = loop_driver.wait_for_result(tid, timeout=5, interval=1)
@@ -181,7 +181,7 @@ def test_wait_for_result_ignores_conflict_copy(monkeypatch):
     import loop_driver
     importlib.reload(loop_driver)
     bc.ensure_dirs()
-    lane = bc.receive_lanes()[0]
+    lane = bc.send_lane()  # A-to-B — B writes results into the send lane's inbox
     tid = bc.make_task_id()
     # A Google-Drive conflict copy of the result must be ignored.
     fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
@@ -200,7 +200,7 @@ def test_wait_for_result_ignores_half_written(monkeypatch):
     import loop_driver
     importlib.reload(loop_driver)
     bc.ensure_dirs()
-    lane = bc.receive_lanes()[0]
+    lane = bc.send_lane()  # A-to-B — B writes results into the send lane's inbox
     tid = bc.make_task_id()
     # No closing fence / no task_id -> parse_frontmatter yields {} or no task_id.
     bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{tid}.md",
@@ -220,4 +220,83 @@ def test_append_state_writes_jsonl(tmp_path, monkeypatch):
     assert f.exists()
     line = json.loads(f.read_text(encoding="utf-8").strip())
     assert line["round"] == 0 and line["payload_out"] == "2"
-    assert "ts" in line  # Zeitstempel wird ergänzt
+    assert "ts" in line  # Zeitstempel wird ergaenzt
+
+
+def _run_b_tick():
+    """Simuliert B: ein Poll-Durchlauf, verarbeitet offene A->B-Tasks.
+    Laeuft als B-Endpoint, danach Endpoint zurueck auf A."""
+    import importlib, os
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = "codex@laptop-b"
+    importlib.reload(bc)
+    import handoff_poll
+    importlib.reload(handoff_poll)
+    handoff_poll.poll_once()
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
+    importlib.reload(bc)
+
+
+def test_run_loop_max_rounds(tmp_path, monkeypatch):
+    """3 Runden: A+B inkrementieren je Runde -> payload = seed + 2*rounds.
+    jsonl hat genau `rounds` Zeilen."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    summary = loop_driver.run_loop(
+        seed="0", max_rounds=3, adapter="increment",
+        round_timeout=5, interval=1, b_tick=_run_b_tick)
+    assert summary["rounds_done"] == 3
+    assert summary["final_payload"] == "6"   # 0 + 2*3
+    assert summary["aborted"] is False
+    jsonl = tmp_path / f"LOOP-{summary['loop_id']}.jsonl"
+    assert len(jsonl.read_text(encoding="utf-8").strip().splitlines()) == 3
+
+
+def test_run_loop_aborts_on_timeout(tmp_path, monkeypatch):
+    """Kein B-Tick -> B-Result kommt nie -> sauberer Abbruch nach Timeout."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    summary = loop_driver.run_loop(
+        seed="0", max_rounds=3, adapter="increment",
+        round_timeout=2, interval=1, b_tick=lambda: None)
+    assert summary["aborted"] is True
+    assert summary["rounds_done"] == 0
+    assert summary["open_task_id"]  # offener Task wird gemeldet
+
+
+def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
+    """B liefert status:error -> fail-fast Abbruch, payload nicht verschleppt."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+
+    def _b_error_tick():
+        """B claimt den offenen A->B-Task und schreibt ein error-Result."""
+        send = "A-to-B"
+        for task in bc.lane_outbox(send).glob("task-*.md"):
+            if ".claimed-" in task.name:
+                continue
+            fm, _ = bc.parse_frontmatter(bc.read_text_utf8(task))
+            tid = fm["task_id"]
+            # B writes results into the lane inbox it polled (A-to-B/inbox/).
+            # wait_for_result polls bc.send_lane() = A-to-B, so write there.
+            result_lane = "A-to-B"
+            _write_result(result_lane, tid, {"loop_id": fm.get("loop_id", "")},
+                          status="error")
+
+    summary = loop_driver.run_loop(
+        seed="0", max_rounds=3, adapter="increment",
+        round_timeout=5, interval=1, b_tick=_b_error_tick)
+    assert summary["aborted"] is True
+    assert summary["rounds_done"] == 0
+    assert "error" in summary["abort_reason"].lower()
