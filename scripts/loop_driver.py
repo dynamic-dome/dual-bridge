@@ -84,19 +84,29 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
     open_task_id = ""
 
     for round_no in range(max_rounds):
+        a_payload = ""  # bound even if the A-runner aborts before computing it
         # 1. A works inline on the current payload.
         runner = runners.RUNNERS.get(adapter)
         if runner is None:
             aborted, abort_reason = True, f"unbekannter adapter {adapter!r}"
+            append_state(loop_id, {"round": round_no, "side": "A",
+                                   "payload_in": payload, "payload_out": "",
+                                   "task_id": "", "status": "error"})
             break
         try:
             a_res = runner(auftrag=payload, fm={"payload": payload},
                            workroot=None)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 -- a runner must not crash the loop
             aborted, abort_reason = True, f"A-runner crash: {exc}"
+            append_state(loop_id, {"round": round_no, "side": "A",
+                                   "payload_in": payload, "payload_out": "",
+                                   "task_id": "", "status": "error"})
             break
         if a_res.status != "done":
             aborted, abort_reason = True, f"A-runner error: {a_res.error_text}"
+            append_state(loop_id, {"round": round_no, "side": "A",
+                                   "payload_in": payload, "payload_out": "",
+                                   "task_id": "", "status": "error"})
             break
         a_payload = a_res.antwort.strip()
 

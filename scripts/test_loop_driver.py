@@ -227,13 +227,15 @@ def _run_b_tick():
     """Simuliert B: ein Poll-Durchlauf, verarbeitet offene A->B-Tasks.
     Laeuft als B-Endpoint, danach Endpoint zurueck auf A."""
     import importlib, os
-    os.environ["DUAL_BRIDGE_ENDPOINT"] = "codex@laptop-b"
-    importlib.reload(bc)
-    import handoff_poll
-    importlib.reload(handoff_poll)
-    handoff_poll.poll_once()
-    os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
-    importlib.reload(bc)
+    try:
+        os.environ["DUAL_BRIDGE_ENDPOINT"] = "codex@laptop-b"
+        importlib.reload(bc)
+        import handoff_poll
+        importlib.reload(handoff_poll)
+        handoff_poll.poll_once()
+    finally:
+        os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
+        importlib.reload(bc)
 
 
 def test_run_loop_max_rounds(tmp_path, monkeypatch):
@@ -282,7 +284,7 @@ def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
 
     def _b_error_tick():
         """B claimt den offenen A->B-Task und schreibt ein error-Result."""
-        send = "A-to-B"
+        send = bc.send_lane()
         for task in bc.lane_outbox(send).glob("task-*.md"):
             if ".claimed-" in task.name:
                 continue
@@ -290,7 +292,7 @@ def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
             tid = fm["task_id"]
             # B writes results into the lane inbox it polled (A-to-B/inbox/).
             # wait_for_result polls bc.send_lane() = A-to-B, so write there.
-            result_lane = "A-to-B"
+            result_lane = bc.send_lane()
             _write_result(result_lane, tid, {"loop_id": fm.get("loop_id", "")},
                           status="error")
 
@@ -300,3 +302,26 @@ def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
     assert summary["aborted"] is True
     assert summary["rounds_done"] == 0
     assert "error" in summary["abort_reason"].lower()
+
+
+def test_run_loop_a_error_leaves_jsonl_trace(tmp_path, monkeypatch):
+    """Ein A-seitiger Runner-Fehler (non-numerischer seed) bricht ab UND
+    hinterlaesst eine JSONL-Zeile (side:A, status:error) fuer die Post-Mortem."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    summary = loop_driver.run_loop(
+        seed="not-a-number", max_rounds=3, adapter="increment",
+        round_timeout=2, interval=1, b_tick=lambda: None)
+    assert summary["aborted"] is True
+    assert summary["rounds_done"] == 0
+    jsonl = tmp_path / f"LOOP-{summary['loop_id']}.jsonl"
+    assert jsonl.exists()
+    import json as _json
+    rows = [_json.loads(l) for l in jsonl.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["side"] == "A"
+    assert rows[0]["status"] == "error"
