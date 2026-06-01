@@ -128,3 +128,6 @@ def test_driver_writes_loop_task(monkeypatch):
     assert fm["payload"] == "7"
     assert fm["adapter"] == "increment"
     assert fm["status"] == "open"
+    assert fm["task_id"] == task_id
+    assert fm["from"] == "claude@laptop-a"
+    assert fm["to"] == "codex@laptop-b"
