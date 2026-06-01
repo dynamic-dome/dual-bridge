@@ -271,6 +271,13 @@ def test_run_loop_aborts_on_timeout(tmp_path, monkeypatch):
     assert summary["aborted"] is True
     assert summary["rounds_done"] == 0
     assert summary["open_task_id"]  # offener Task wird gemeldet
+    import json as _json
+    jsonl = tmp_path / f"LOOP-{summary['loop_id']}.jsonl"
+    assert jsonl.exists()
+    rows = [_json.loads(l) for l in jsonl.read_text(encoding="utf-8").strip().splitlines()]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "timeout"
+    assert rows[0]["task_id"] == summary["open_task_id"]
 
 
 def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):

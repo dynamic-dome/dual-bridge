@@ -122,6 +122,9 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
         fm = wait_for_result(task_id, timeout=round_timeout, interval=interval)
         if fm is None:
             aborted, abort_reason = True, f"timeout in round {round_no}"
+            append_state(loop_id, {"round": round_no, "side": "B",
+                                   "payload_in": a_payload, "payload_out": "",
+                                   "task_id": task_id, "status": "timeout"})
             break
         if fm.get("status") == "error":
             aborted, abort_reason = True, f"B error in round {round_no}"
