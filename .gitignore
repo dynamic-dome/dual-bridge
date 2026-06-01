@@ -24,3 +24,6 @@ dual-bridge-work/
 .DS_Store
 Thumbs.db
 *.swp
+
+# One-off drive-cleanup backups (test-leak incident 2026-06-02), never shared
+.drive-cleanup-backup-*/
