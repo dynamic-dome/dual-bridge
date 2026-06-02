@@ -141,6 +141,52 @@ def write_review_task(loop_id: str, round_no: int, auftrag: str,
     return task_id
 
 
+def write_goal_review_task(loop_id: str, round_no: int, goal: str,
+                           done_criteria: list[str], loop_branch: str,
+                           loop_commit: str, diff: str = "") -> str:
+    """Write a goal-loop kind:review task to B. The reviewer judges the diff
+    against the explicit done-criteria and answers with one of THREE markers:
+    accepted (all criteria met), escalate (needs a human decision), or rejected
+    (gaps remain). Tool-less reviewer → diff embedded in the prompt."""
+    bc.ensure_dirs()
+    me = bc.this_endpoint()
+    lane = bc.send_lane()
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "schema_version": "2",
+        "agent": me, "from": me, "to": to, "purpose": "handoff",
+        "status": "open", "task_id": task_id, "kind": "review",
+        "adapter": "claude",
+        "loop_id": loop_id, "round": str(round_no),
+        "loop_branch": loop_branch, "loop_commit": loop_commit,
+        "payload": f"{loop_branch}@{loop_commit}",
+        "claimed_by": "", "claimed_at": "",
+    }
+    diff_block = diff.strip() or "(kein Diff — codex meldete keine Datei-Aenderung)"
+    crit_block = "\n".join(f"- [ ] {c}" for c in done_criteria)
+    body = (
+        f"## Ziel\n{goal}\n\n"
+        f"## Done-Kriterien\n{crit_block}\n\n"
+        f"Der Bau-Agent (codex) hat auf `{loop_branch}` (Commit `{loop_commit}`) "
+        "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
+        "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
+        f"```diff\n{diff_block}\n```\n\n"
+        "Pruefe den Diff GEGEN die Done-Kriterien. Schreibe zuerst eine kurze "
+        "Begruendung (welche Kriterien erfuellt sind, welche nicht), und als "
+        "ALLERLETZTE Zeile NUR einen der drei Marker:\n"
+        "`VERDICT: accepted`   (alle Done-Kriterien erfuellt)\n"
+        "`VERDICT: rejected`   (Kriterien noch offen, Bau soll nachbessern)\n"
+        "`VERDICT: escalate`   (eine menschliche Entscheidung ist noetig — "
+        "mehrdeutiges Kriterium, Architektur-/Risiko-Frage)\n"
+        "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten.\n\n"
+        "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+
+
 def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
                         build_runner, round_timeout, interval=5, b_tick=None):
     """One build→review round. A builds via build_runner (codex), writes a

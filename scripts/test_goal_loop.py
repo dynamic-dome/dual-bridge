@@ -74,3 +74,24 @@ def test_parse_seed_empty_criteria_raises(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     with __import__("pytest").raises(ValueError):
         ld.parse_seed("## Ziel\nG\n\n## Done-Kriterien\n")
+
+
+# --- Task 3: write_goal_review_task ---
+
+def test_write_goal_review_task_embeds_criteria_and_three_markers(
+        monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    task_id = ld.write_goal_review_task(
+        loop_id="loop-x", round_no=0, goal="Add greet util",
+        done_criteria=["greet(name) works", "has docstring"],
+        loop_branch="bridge/loop-x", loop_commit="c1", diff="+def greet(): ...")
+    lane = bc.send_lane()
+    path = bc.lane_outbox(lane) / f"task-{task_id}.md"
+    text = path.read_text(encoding="utf-8")
+    assert "greet(name) works" in text
+    assert "has docstring" in text
+    assert "VERDICT: accepted" in text
+    assert "VERDICT: rejected" in text
+    assert "VERDICT: escalate" in text
+    assert "+def greet(): ..." in text
