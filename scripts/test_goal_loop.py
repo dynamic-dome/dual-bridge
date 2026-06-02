@@ -194,3 +194,42 @@ def test_goal_loop_accepted_round_one(monkeypatch, tmp_path):
     assert summary["escalated"] is False
     assert summary["final_commit"] == "c1"
     assert summary["final_branch"].startswith("bridge/loop-")
+
+
+# --- Task 7: rejected iterates, escalate escalates ---
+
+def test_goal_loop_rejected_then_accepted_iterates(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    verdicts = iter(["rejected", "accepted"])
+
+    def b_seq(task_id):
+        v = next(verdicts)
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": v, "verdict_reason": f"reason-{v}"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, f"## Antwort\nVERDICT: {v}\n"))
+
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c2"]), b_tick=b_seq)
+    assert summary["accepted"] is True
+    assert summary["rounds_done"] == 2
+
+
+def test_goal_loop_reviewer_escalate(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["ambiguous one"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]),
+        b_tick=_b_verdict("escalate", reason="criterion is ambiguous"))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "reviewer_requested"
+    assert summary["accepted"] is False
+    meta = ld.read_escalation(summary["loop_id"])
+    assert meta["trigger"] == "reviewer_requested"

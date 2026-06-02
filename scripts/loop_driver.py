@@ -489,7 +489,19 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
         if out["verdict"] == "accepted":
             accepted = True
             break
-        # (escalate / stagnation / dangerous handled in later tasks)
+        if out["verdict"] == "escalate":
+            escalated = True
+            escalation_trigger = "reviewer_requested"
+            _escalate(loop_id, "reviewer_requested", round_no, loop_branch,
+                      out.get("commit") or final_commit, goal, done_criteria,
+                      prev_commit,
+                      reason=f"Reviewer fordert Eskalation: "
+                             f"{out.get('verdict_reason') or '(kein Grund)'}",
+                      question="Der Reviewer braucht eine menschliche "
+                               "Entscheidung (s. Grund). Seed schaerfen + "
+                               "--resume.")
+            break
+        # rejected → iterate (stagnation guards added in Task 8)
         prev_commit = out.get("commit")
         reason = out.get("verdict_reason")
         prev_reason = reason
