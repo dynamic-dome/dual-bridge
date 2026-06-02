@@ -311,6 +311,7 @@ def _codex_runner(auftrag: str, fm: dict, workroot):
         workroot=wr,
         codex_bin=os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None,
         timeout=int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600")),
+        branch=fm.get("branch"),
     )
 
 

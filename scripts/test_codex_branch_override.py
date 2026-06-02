@@ -101,3 +101,34 @@ def test_clone_or_pull_falls_back_to_base_when_branch_absent(monkeypatch, tmp_pa
     monkeypatch.setattr(ca, "_run_git", fake_run_git)
     ca._git_clone_or_pull("repo", "main", workdir, prefer_branch="bridge/loop-new")
     assert ("reset", "--hard", "origin/main") in calls
+
+
+def test_codex_runner_forwards_branch_from_fm(monkeypatch, tmp_path):
+    """_codex_runner reads fm['branch'] and passes it to run_codex_task."""
+    captured = {}
+
+    def fake_task(**kw):
+        captured.update(kw)
+        from runners import RunnerResult
+        return RunnerResult(status="done", antwort="ok")
+
+    monkeypatch.setattr(ca, "run_codex_task", fake_task)
+    fm = {"task_id": "t-7", "repo": "r", "base_branch": "main",
+          "branch": "bridge/loop-zzz"}
+    res = ca._codex_runner(auftrag="build it", fm=fm, workroot=tmp_path)
+    assert res.status == "done"
+    assert captured.get("branch") == "bridge/loop-zzz"
+
+
+def test_codex_runner_branch_absent_is_none(monkeypatch, tmp_path):
+    """No fm['branch'] → branch=None (legacy task-branch behaviour)."""
+    captured = {}
+
+    def fake_task(**kw):
+        captured.update(kw)
+        from runners import RunnerResult
+        return RunnerResult(status="done", antwort="ok")
+
+    monkeypatch.setattr(ca, "run_codex_task", fake_task)
+    res = ca._codex_runner(auftrag="x", fm={"task_id": "t-8"}, workroot=tmp_path)
+    assert captured.get("branch") is None
