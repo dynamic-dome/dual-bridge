@@ -30,6 +30,11 @@ import tempfile
 
 import pytest
 
+# The build-review loop clones repos (with their own test files) under
+# state/work/<loop_id>/. Never collect those — they cause import-file-mismatch
+# collisions with the real scripts/ tests.
+collect_ignore_glob = ["state/*"]
+
 _PREFIX = "DUAL_BRIDGE"
 
 # The real Google-Drive bridge root. A test that resolves to this path would

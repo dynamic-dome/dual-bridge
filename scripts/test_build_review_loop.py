@@ -231,7 +231,6 @@ def test_main_build_review_requires_repo(monkeypatch, tmp_path, capsys):
     assert "repo" in out.lower()
 
 
-
 def test_review_task_embeds_diff(monkeypatch, tmp_path):
     """write_review_task embeds the build diff in the task body (no 'fetch')."""
     ld = _reload_as_a(monkeypatch, tmp_path)
