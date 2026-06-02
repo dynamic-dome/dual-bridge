@@ -337,6 +337,45 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
     }
 
 
+def _escalation_path(loop_id: str):
+    return STATE_DIR / f"ESCALATION-{loop_id}.md"
+
+
+def write_escalation(loop_id: str, trigger: str, round_no: int, branch: str,
+                     commit: str, goal: str,
+                     criteria_status: list[tuple[str, bool]], reason: str,
+                     question: str, progress: str):
+    """Write ESCALATION-<loop_id>.md (the durable escalation artefact). Returns
+    the path. `criteria_status` is a list of (criterion, met) pairs."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    fm = {
+        "loop_id": loop_id, "trigger": trigger, "round": str(round_no),
+        "branch": branch, "commit": commit, "exit_reason": "escalation",
+        "created": bc.now_iso(),
+    }
+    crit_lines = "\n".join(
+        f"- [{'x' if met else ' '}] {name}" for name, met in criteria_status)
+    body = (
+        f"## Ziel (aus dem Seed)\n{goal}\n\n"
+        f"## Done-Kriterien — Stand\n{crit_lines}\n\n"
+        f"## Eskalations-Grund\n{reason}\n\n"
+        f"## Offene Frage an den Owner\n{question}\n\n"
+        f"## Zwischenstand\n{progress}\n")
+    path = _escalation_path(loop_id)
+    bc.write_text_utf8(path, bc.build_document(fm, body))
+    return path
+
+
+def read_escalation(loop_id: str) -> dict | None:
+    """Read the frontmatter of ESCALATION-<loop_id>.md (for resume validation).
+    Returns the frontmatter dict, or None if the file does not exist."""
+    path = _escalation_path(loop_id)
+    if not path.exists():
+        return None
+    fm, _body = bc.parse_frontmatter(path.read_text(encoding="utf-8"))
+    return fm
+
+
 def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
              interval: float = 5, b_tick=None) -> dict:
     """Drive the ping-pong loop. Each round: A works inline on the current

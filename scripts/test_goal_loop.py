@@ -122,3 +122,32 @@ def test_scan_dangerous_flags_secret(monkeypatch, tmp_path):
 def test_scan_dangerous_clean_passes(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     assert ld.scan_dangerous("def greet(name):\n    return f'Hi {name}'") is None
+
+
+# --- Task 5: write/read escalation ---
+
+def test_write_and_read_escalation_roundtrip(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    path = ld.write_escalation(
+        loop_id="loop-x", trigger="reviewer_requested", round_no=2,
+        branch="bridge/loop-x", commit="c2", goal="Add greet util",
+        criteria_status=[("greet works", True), ("naming convention", False)],
+        reason="Reviewer: naming convention is ambiguous",
+        question="Which naming style: snake_case or camelCase?",
+        progress="greet() exists on bridge/loop-x@c2")
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    assert "trigger: reviewer_requested" in text
+    assert "Which naming style" in text
+    assert "- [x] greet works" in text
+    assert "- [ ] naming convention" in text
+
+    meta = ld.read_escalation("loop-x")
+    assert meta["trigger"] == "reviewer_requested"
+    assert meta["loop_id"] == "loop-x"
+    assert meta["branch"] == "bridge/loop-x"
+
+
+def test_read_escalation_missing_returns_none(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.read_escalation("does-not-exist") is None
