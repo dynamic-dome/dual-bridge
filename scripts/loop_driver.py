@@ -302,9 +302,13 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
         return {"status": "error", "abort_reason": f"B error in round {round_no}",
                 "verdict": None, "verdict_reason": None,
                 "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    # parse_verdict yields an empty reason for accepted/escalate/bare-rejected,
+    # but the reviewer's full analysis lives in the result `payload`. Surface it
+    # so the escalation file carries the real reasoning, not "(kein Grund)".
+    reason = fm_result.get("verdict_reason") or fm_result.get("payload") or ""
     return {"status": "done", "abort_reason": "",
             "verdict": fm_result.get("verdict"),
-            "verdict_reason": fm_result.get("verdict_reason"),
+            "verdict_reason": reason,
             "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
 
 

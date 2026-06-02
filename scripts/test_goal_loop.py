@@ -431,3 +431,37 @@ def test_escalation_file_no_misleading_checkboxes(monkeypatch, tmp_path):
     assert "crit one" in text and "crit two" in text
     # No checkbox claims either way — neither falsely-met nor checkbox theatre.
     assert "[x]" not in text
+
+
+# --- Live-proof follow-up: escalate reason must reach the owner ---
+
+def test_goal_loop_escalate_reason_falls_back_to_payload(monkeypatch, tmp_path):
+    """Live-proof finding: parse_verdict returns ('escalate', '') — empty reason.
+    The reviewer's real analysis lands in the result's `payload` field, not
+    verdict_reason. The escalation file must surface that analysis, not
+    '(kein Grund)'. The loop falls back to payload when verdict_reason is empty."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    analysis = ("Kriterium 1+2 erfuellt. Kriterium 3 ist mehrdeutig: keine "
+                "Projekt-Referenz im Diff, nicht verifizierbar.")
+
+    def b_escalate_with_payload(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "escalate", "verdict_reason": "",
+              "payload": analysis}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, f"## Antwort\n{analysis}\n"
+                                                 "VERDICT: escalate\n"))
+
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c1", "c2", "ambiguous"], repo="r",
+        base_branch="main", max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]), b_tick=b_escalate_with_payload)
+    assert summary["escalation_trigger"] == "reviewer_requested"
+    meta = ld.read_escalation(summary["loop_id"])
+    # The escalation FILE body must carry the reviewer's analysis.
+    text = (ld._escalation_path(summary["loop_id"])).read_text(encoding="utf-8")
+    assert "mehrdeutig" in text
+    assert "(kein Grund)" not in text
