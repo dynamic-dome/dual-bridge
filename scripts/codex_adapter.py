@@ -88,15 +88,25 @@ def _run_git(workdir: Path | None, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path) -> Path:
-    """Clone repo@base_branch into workdir (fresh). If workdir exists, fetch+
-    reset to origin/base_branch. Raises RuntimeError with stderr on failure."""
+def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
+                       prefer_branch: str | None = None) -> Path:
+    """Clone repo@base_branch into workdir (fresh). If workdir exists, fetch and
+    reset. When prefer_branch is given AND exists on origin, reset to it (so the
+    loop continues its own prior work); otherwise reset to base_branch. Raises
+    RuntimeError with stderr on failure."""
     workdir.parent.mkdir(parents=True, exist_ok=True)
     if (workdir / ".git").exists():
+        fetch = _run_git(workdir, "fetch", "origin")
+        if fetch.returncode != 0:
+            raise RuntimeError(f"git fetch failed: {fetch.stderr.strip()}")
+        target = base_branch
+        if prefer_branch:
+            ls = _run_git(workdir, "ls-remote", "--heads", "origin", prefer_branch)
+            if ls.returncode == 0 and ls.stdout.strip():
+                target = prefer_branch
         for args in (
-            ("fetch", "origin"),
-            ("checkout", base_branch),
-            ("reset", "--hard", f"origin/{base_branch}"),
+            ("checkout", target),
+            ("reset", "--hard", f"origin/{target}"),
         ):
             cp = _run_git(workdir, *args)
             if cp.returncode != 0:
@@ -174,7 +184,7 @@ def run_codex_task(
     # 2. repo reachable?
     workdir = Path(workroot) / task_id
     try:
-        _git_clone_or_pull(repo, base_branch, workdir)
+        _git_clone_or_pull(repo, base_branch, workdir, prefer_branch=branch)
     except RuntimeError as exc:
         return CodexResult(status="error", error_text=str(exc))
 
