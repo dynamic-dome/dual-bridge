@@ -57,6 +57,77 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
     return task_id
 
 
+def write_review_task(loop_id: str, round_no: int, auftrag: str,
+                      loop_branch: str, loop_commit: str) -> str:
+    """Write an open kind:review task to B (claude reviewer). Mirrors the
+    Stage-1 envelope but adds loop_branch/loop_commit and kind=review."""
+    bc.ensure_dirs()
+    me = bc.this_endpoint()
+    lane = bc.send_lane()
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "schema_version": "2",
+        "agent": me, "from": me, "to": to, "purpose": "handoff",
+        "status": "open", "task_id": task_id, "kind": "review",
+        "adapter": "claude",
+        "loop_id": loop_id, "round": str(round_no),
+        "loop_branch": loop_branch, "loop_commit": loop_commit,
+        "payload": f"{loop_branch}@{loop_commit}",
+        "claimed_by": "", "claimed_at": "",
+    }
+    body = (f"## Auftrag\n{auftrag}\n\n"
+            f"Hol den Branch `{loop_branch}` (Commit `{loop_commit}`):\n"
+            f"```\ngit fetch && git checkout {loop_branch}\n```\n"
+            "Reviewe den Code. Antworte mit `VERDICT: accepted` oder "
+            "`VERDICT: rejected` plus kurzer Begruendung.\n\n"
+            "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+
+
+def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
+                        build_runner, round_timeout, interval=5, b_tick=None):
+    """One build→review round. A builds via build_runner (codex), writes a
+    kind:review task to B, waits for B's verdict. Returns an outcome dict.
+    `b_tick(task_id)` is a test hook; in production B is a separate poller."""
+    loop_branch = f"bridge/loop-{loop_id}"
+    fm = {"task_id": bc.make_task_id(), "repo": repo,
+          "base_branch": base_branch, "branch": loop_branch}
+    try:
+        a_res = build_runner(auftrag=auftrag, fm=fm, workroot=None)
+    except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
+        return {"status": "error", "abort_reason": f"A-build crash: {exc}",
+                "verdict": None, "verdict_reason": None, "commit": None,
+                "task_id": ""}
+    if a_res.status != "done":
+        return {"status": "error",
+                "abort_reason": f"A-build error: {a_res.error_text}",
+                "verdict": None, "verdict_reason": None, "commit": None,
+                "task_id": ""}
+
+    task_id = write_review_task(loop_id, round_no, auftrag,
+                                loop_branch, a_res.commit or "")
+    if b_tick is not None:
+        b_tick(task_id)
+
+    fm_result = wait_for_result(task_id, timeout=round_timeout, interval=interval)
+    if fm_result is None:
+        return {"status": "timeout", "abort_reason": f"timeout in round {round_no}",
+                "verdict": None, "verdict_reason": None,
+                "commit": a_res.commit, "task_id": task_id}
+    if fm_result.get("status") == "error":
+        return {"status": "error", "abort_reason": f"B error in round {round_no}",
+                "verdict": None, "verdict_reason": None,
+                "commit": a_res.commit, "task_id": task_id}
+    return {"status": "done", "abort_reason": "",
+            "verdict": fm_result.get("verdict"),
+            "verdict_reason": fm_result.get("verdict_reason"),
+            "commit": a_res.commit, "task_id": task_id}
+
+
 def _is_conflict_copy(name: str) -> bool:
     # Same heuristic as handoff_poll._is_conflict_copy / handoff_collect.
     return "(" in name and ")" in name
