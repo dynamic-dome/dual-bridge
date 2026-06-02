@@ -91,6 +91,12 @@ python handoff_poll.py --watch                 # pollt lane-B-to-A/outbox, ruft 
 überschreibt den Ziel-Endpoint (Default: der Peer der eigenen Sende-Lane).
 Einmal-Durchlauf statt Dauerschleife: dieselben Skripte ohne `--watch`.
 
+`handoff_poll.py --watch` nutzt, wenn das optionale Python-Paket `watchdog`
+installiert ist, einen Filesystem-Wakeup auf den Empfangs-`outbox/`-Ordnern.
+Neue Task-Dateien triggern dann sofort einen Poll-Durchlauf. Ohne `watchdog`
+bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
+`watchdog` zusätzlich der maximale Fallback-Abstand.
+
 ## Konfiguration (Env-Vars)
 
 | Variable | Zweck | Default |
@@ -146,15 +152,19 @@ claimed_at:
   fnmatch-Patterns; leer = alle erlaubt).
 - **P0-Crash-Requeue:** ein geclaimter Task ohne Result geht beim Poller-Crash
   nicht verloren, sondern wird re-queued.
+- **Optionaler Filesystem-Wakeup:** `handoff_poll.py --watch` kann neue Tasks
+  per `watchdog` sofort verarbeiten; ohne Zusatzpaket läuft der bewährte
+  Intervall-Poll weiter.
 - **Sibling-Surrender-Cleanup** gegen doppelte Claims desselben `task_id`.
 - **Never-crash-Poller:** ein einzelner kaputter Task reißt die Schleife nicht ab.
 
-## Verifizierter Stand (Stage 2a, 2026-05-31)
+## Verifizierter Stand (Stage 2a+, 2026-06-03)
 
 - ✅ **B→A-Roundtrip bewiesen** (config-only — dieselben Skripte, Richtung allein
   per `DUAL_BRIDGE_ENDPOINT` umgedreht).
-- ✅ **42 Tests grün:** `test_lanes` (11), `test_claude_adapter` (4),
-  `test_hardening` (10), `test_stage1` (17).
+- ✅ **Optionaler Poller-Filesystem-Wakeup** (`watchdog` wenn installiert,
+  Intervall-Poll als Fallback).
+- ✅ **146 Tests grün** (Collection + voller pytest-Lauf).
 - ⬜ **Live-`claude -p`-Beweis über die echte Bridge steht noch aus** (Adapter ist
   da und getestet, der geräteübergreifende Live-Lauf fehlt).
 

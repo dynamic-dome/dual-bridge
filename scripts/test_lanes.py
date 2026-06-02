@@ -138,6 +138,100 @@ def test_poll_unknown_adapter_errors() -> None:
     print("  poll OK — unknown adapter -> status:error, no crash")
 
 
+def test_poll_watch_wait_uses_event_without_sleep() -> None:
+    import handoff_poll as hp
+
+    slept = []
+
+    def fake_sleep(_interval):
+        slept.append(_interval)
+
+    class FakeEvent:
+        def __init__(self):
+            self.waited = None
+            self.cleared = False
+
+        def wait(self, interval):
+            self.waited = interval
+            return True
+
+        def clear(self):
+            self.cleared = True
+
+    event = FakeEvent()
+    original_sleep = hp.time.sleep
+    hp.time.sleep = fake_sleep
+    try:
+        hp._wait_for_next_poll(99, event)
+    finally:
+        hp.time.sleep = original_sleep
+    assert event.waited == 99
+    assert event.cleared is True
+    assert slept == [], "watchdog wake path must not call time.sleep directly"
+    print("  watch OK — event wait wakes poller without direct sleep")
+
+
+def test_poll_watch_wait_falls_back_to_sleep() -> None:
+    import handoff_poll as hp
+
+    slept = []
+    original_sleep = hp.time.sleep
+    hp.time.sleep = lambda interval: slept.append(interval)
+    try:
+        hp._wait_for_next_poll(7, None)
+    finally:
+        hp.time.sleep = original_sleep
+    assert slept == [7]
+    print("  watch OK — missing watchdog falls back to interval sleep")
+
+
+def test_start_outbox_watch_schedules_receive_lanes_and_wakes() -> None:
+    _fresh_bridge("claude@laptop-a")
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_poll as hp; importlib.reload(hp)
+
+    class FakeEvent:
+        def __init__(self):
+            self.set_count = 0
+
+        def set(self):
+            self.set_count += 1
+
+    class FakeObserver:
+        def __init__(self):
+            self.scheduled = []
+            self.started = False
+
+        def schedule(self, handler, path, recursive=False):
+            self.scheduled.append((handler, Path(path), recursive))
+
+        def start(self):
+            self.started = True
+
+    class EventObject:
+        is_directory = False
+
+        def __init__(self, src_path=None, dest_path=None):
+            self.src_path = src_path
+            self.dest_path = dest_path
+
+    observer, event = hp._start_outbox_watch(
+        observer_factory=FakeObserver,
+        event_factory=FakeEvent,
+        handler_base=object,
+    )
+    assert observer.started is True
+    assert len(observer.scheduled) == len(bc.receive_lanes())
+    handler, path, recursive = observer.scheduled[0]
+    assert path == bc.lane_outbox("B-to-A")
+    assert recursive is False
+    handler.on_created(EventObject(src_path=str(path / "task-20260603-000000-000000-0-abcd.md")))
+    handler.on_created(EventObject(src_path=str(path / "task-20260603-000000-000000-0-abcd (1).md")))
+    handler.on_moved(EventObject(dest_path=str(path / "task-20260603-000000-000000-0-abce.md")))
+    assert event.set_count == 2, "fresh task create/move should wake; conflict copy should not"
+    print("  watch OK — receive-lane outbox watcher schedules and wakes on task events")
+
+
 def test_writer_uses_send_lane_and_adapter() -> None:
     _fresh_bridge("codex@laptop-b")  # B sends on B-to-A
     import bridge_common as bc; importlib.reload(bc)
@@ -188,6 +282,9 @@ def main() -> int:
              test_codex_registered_and_allowlist,
              test_poll_dispatches_on_adapter_echo, test_poll_to_filter_skips_foreign,
              test_poll_unknown_adapter_errors,
+             test_poll_watch_wait_uses_event_without_sleep,
+             test_poll_watch_wait_falls_back_to_sleep,
+             test_start_outbox_watch_schedules_receive_lanes_and_wakes,
              test_writer_uses_send_lane_and_adapter,
              test_b_to_a_roundtrip_echo]
     failed = 0

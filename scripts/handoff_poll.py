@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 
 import bridge_common as bc
@@ -34,6 +35,72 @@ MIRROR_FIELDS = ("gate_id", "run_id", "stage", "loop_id", "round")
 def _is_conflict_copy(name: str) -> bool:
     """Google-Drive conflict copies look like 'task-... (1).md'. Skip them."""
     return "(" in name and ")" in name
+
+
+def _is_watch_task_path(path: str) -> bool:
+    """True when a filesystem event path could be a fresh bridge task."""
+    name = bc.Path(path).name
+    return name.startswith("task-") and name.endswith(".md") and not _is_conflict_copy(name)
+
+
+def _start_outbox_watch(observer_factory=None, event_factory=None, handler_base=None):
+    """Start an optional watchdog observer for receive-lane outboxes.
+
+    Returns (observer, wake_event) when watchdog is available, otherwise
+    (None, None). The poll loop remains stdlib-only: missing watchdog simply
+    falls back to interval polling.
+    """
+    if observer_factory is None or handler_base is None:
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+        except Exception as exc:  # noqa: BLE001 -- optional dependency
+            print(f"[B] Filesystem-Watch deaktiviert ({type(exc).__name__}); Poll-Fallback aktiv.")
+            return None, None
+        observer_factory = Observer
+        handler_base = FileSystemEventHandler
+
+    wake_event = event_factory() if event_factory is not None else threading.Event()
+
+    class BridgeOutboxHandler(handler_base):
+        def _wake_for(self, path: str | None, is_directory: bool = False) -> None:
+            if path and not is_directory and _is_watch_task_path(path):
+                wake_event.set()
+
+        def on_created(self, event) -> None:
+            self._wake_for(getattr(event, "src_path", None), getattr(event, "is_directory", False))
+
+        def on_modified(self, event) -> None:
+            self._wake_for(getattr(event, "src_path", None), getattr(event, "is_directory", False))
+
+        def on_moved(self, event) -> None:
+            self._wake_for(getattr(event, "dest_path", None), getattr(event, "is_directory", False))
+
+    observer = observer_factory()
+    try:
+        for lane in bc.receive_lanes():
+            outbox = bc.lane_outbox(lane)
+            outbox.mkdir(parents=True, exist_ok=True)
+            observer.schedule(BridgeOutboxHandler(), str(outbox), recursive=False)
+        observer.start()
+    except Exception as exc:  # noqa: BLE001 -- watchdog must stay optional/fallback
+        print(f"[B] Filesystem-Watch Start fehlgeschlagen ({type(exc).__name__}); Poll-Fallback aktiv.")
+        try:
+            observer.stop()
+            observer.join(timeout=5)
+        except Exception:
+            pass
+        return None, None
+    return observer, wake_event
+
+
+def _wait_for_next_poll(interval: int, wake_event=None) -> None:
+    """Wait until watchdog wakes the poller or the fallback interval expires."""
+    if wake_event is None:
+        time.sleep(interval)
+        return
+    wake_event.wait(interval)
+    wake_event.clear()
 
 
 def parse_verdict(text: str) -> tuple[str, str]:
@@ -314,15 +381,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[B] Durchlauf fertig — {n} Task(s) verarbeitet.")
         return 0
 
-    print(f"[B] Watch-Modus, alle {args.interval}s. Strg+C zum Beenden.")
+    observer, wake_event = _start_outbox_watch()
+    if observer is not None:
+        print(f"[B] Watch-Modus, Filesystem-Wakeup + Poll-Fallback {args.interval}s. Strg+C zum Beenden.")
+    else:
+        print(f"[B] Watch-Modus, alle {args.interval}s. Strg+C zum Beenden.")
     try:
         while True:
             n = poll_once()
             if n:
                 print(f"[B] {n} Task(s) verarbeitet.")
-            time.sleep(args.interval)
+            _wait_for_next_poll(args.interval, wake_event)
     except KeyboardInterrupt:
         print("\n[B] Beendet.")
+    finally:
+        if observer is not None:
+            observer.stop()
+            observer.join(timeout=5)
     return 0
 
 

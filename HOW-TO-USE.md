@@ -17,7 +17,7 @@ reine Konfiguration (`DUAL_BRIDGE_ENDPOINT`). Aktueller Ausbau: **Stage 2a**
 |---|---|
 | `scripts/` | Die 4 Skripte + Adapter + `bridge_common.py` + Tests |
 | `scripts/handoff_write.py` | Task schreiben |
-| `scripts/handoff_poll.py` | Pollen + verarbeiten (Empfänger) |
+| `scripts/handoff_poll.py` | Pollen + verarbeiten (Empfänger); `--watch` nutzt optional `watchdog`-Filesystem-Wakeup |
 | `scripts/handoff_collect.py` | Results einsammeln (Sender) |
 | `scripts/latency_probe.py` | Roundtrip-Latenz messen |
 | `README.md` | Vollreferenz: Architektur, Env-Vars, Task-Protokoll |
@@ -34,7 +34,7 @@ Alle Skripte laufen auf **beiden** Knoten identisch — Richtung nur per
 cd ~/AI/dual-bridge/scripts
 python handoff_write.py --adapter codex --kind implement --repo <url> "Auftrag"
 python handoff_collect.py --watch     # auf der Sender-Seite: wartet aufs Result
-python handoff_poll.py --watch        # auf der Empfänger-Seite: verarbeitet Tasks
+python handoff_poll.py --watch        # Empfänger: verarbeitet Tasks; optional sofort per watchdog, sonst Intervall-Poll
 ```
 
 Auf Laptop B vorher Endpoint setzen:
@@ -54,8 +54,9 @@ Auf Laptop B vorher Endpoint setzen:
 
 ## Aktueller Stand
 
-- ✅ **Stage 2a fertig:** Lanes, Adapter, Bidirektionalität, endpoint-relative
-  CLI. B→A-Roundtrip config-only bewiesen, 42 Tests grün.
+- ✅ **Stage 2a+ fertig:** Lanes, Adapter, Bidirektionalität, endpoint-relative
+  CLI. B→A-Roundtrip config-only bewiesen; Poller-`--watch` hat optionalen
+  Filesystem-Wakeup mit Intervall-Fallback.
 - ⬜ **Offen:** Live-`claude -p`-Beweis geräteübergreifend über die echte Bridge.
 - ⬜ **Stage 2b:** Review-Loop (`kind: review`) + Overnight-Scheduler — noch nicht begonnen.
 

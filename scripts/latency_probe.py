@@ -20,8 +20,11 @@ Usage:
 The roundtrip measured here is end-to-end as the *user* experiences it:
   task written  ->  Drive sync up  ->  peer polls + claims + echoes
                 ->  Drive sync down ->  result visible again
-So it includes the peer's poll interval (default 15s). To isolate pure sync
-latency, run the peer's poller with a short interval (e.g. --interval 2).
+So it includes the peer poller's wake behaviour. With optional `watchdog`
+installed, a new task can wake the peer immediately; without it, latency includes
+the peer's fallback poll interval (default 15s). To isolate pure sync latency on
+a fallback-only peer, run the peer's poller with a short interval (e.g.
+--interval 2).
 """
 from __future__ import annotations
 
