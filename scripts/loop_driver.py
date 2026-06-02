@@ -84,9 +84,12 @@ def write_review_task(loop_id: str, round_no: int, auftrag: str,
             "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
             "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
             f"```diff\n{diff_block}\n```\n\n"
-            "Reviewe die Aenderung gegen den Auftrag. Antworte mit GENAU einer "
-            "Zeile `VERDICT: accepted` oder `VERDICT: rejected` plus kurzer "
-            "Begruendung.\n\n## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+            "Reviewe die Aenderung gegen den Auftrag. Schreibe zuerst eine kurze "
+            "Begruendung, und als ALLERLETZTE Zeile NUR den Marker — entweder\n"
+            "`VERDICT: accepted`\noder\n`VERDICT: rejected`\n"
+            "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten (keine "
+            "Begruendung in derselben Zeile, kein Gedankenstrich, kein Punkt).\n\n"
+            "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
     bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
                        bc.build_document(fm, body))
     return task_id

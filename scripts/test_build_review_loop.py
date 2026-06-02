@@ -243,3 +243,19 @@ def test_review_task_embeds_diff(monkeypatch, tmp_path):
     assert "+added" in body
     assert "```diff" in body
     assert "KEINE Tools" in body
+
+
+def test_review_prompt_format_parses_as_accepted():
+    """The format the review prompt now demands (reason line, then a bare
+    'VERDICT: accepted' last line) must parse as accepted via parse_verdict.
+    Closes the live-found seam: a single-line 'VERDICT: accepted - reason' did
+    NOT parse (fail-closed to rejected). Regression guard for that bug."""
+    import handoff_poll
+    # Compliant format (separate marker line, bare token) → accepted.
+    good = ("Der Diff ergaenzt einen Docstring wie verlangt, keine Code-Aenderung.\n"
+            "VERDICT: accepted")
+    assert handoff_poll.parse_verdict(good) == ("accepted", "")
+    # The OLD anti-format (reason on the verdict line) does NOT parse → fail-closed.
+    bad = "VERDICT: accepted — sieht gut aus"
+    verdict, reason = handoff_poll.parse_verdict(bad)
+    assert verdict == "rejected" and "unrecognised" in reason
