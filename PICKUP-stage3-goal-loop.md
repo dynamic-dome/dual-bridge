@@ -16,9 +16,15 @@ Voraussetzung: beide Geräte haben `dual-bridge` auf `main` == `origin/main`
 cd C:\Users\domes\AI\dual-bridge
 git pull                                  # auf d7f2be2 oder neuer
 cd scripts
-$env:DUAL_BRIDGE_ENDPOINT = 'claude@laptop-b'   # B reviewt = claude
+$env:DUAL_BRIDGE_ENDPOINT = 'codex@laptop-b'    # B = laptop-b (gerätebasiert!)
 python handoff_poll.py --watch --interval 10
 ```
+
+> WICHTIG: Die Endpoint-Labels sind **gerätebasiert** (`@laptop-a`/`@laptop-b`),
+> NICHT rollenbasiert. Nur `claude@laptop-a` und `codex@laptop-b` sind registriert.
+> Welcher Runner wirklich läuft, steuert das `adapter`-Feld im Task (Review-Task
+> trägt `adapter: claude` → B reviewt mit claude), nicht das Label. B MUSS daher
+> `codex@laptop-b` setzen (sonst falsche Lane / kein Task).
 
 B läuft jetzt und wartet auf `kind:review`-Tasks. Laufen lassen.
 
@@ -30,7 +36,7 @@ ist bewusst mehrdeutig → soll den `escalate`-Pfad auslösen).
 
 ```powershell
 cd C:\Users\domes\AI\dual-bridge\scripts
-$env:DUAL_BRIDGE_ENDPOINT = 'codex@laptop-a'    # A baut = codex
+$env:DUAL_BRIDGE_ENDPOINT = 'claude@laptop-a'   # A = laptop-a (gerätebasiert; baut via codex-Runner)
 python loop_driver.py --mode goal-loop `
   --repo https://github.com/dynamic-dome/dual-bridge `
   --base-branch main `
