@@ -21,6 +21,7 @@ class RunnerResult:
     error_text: str | None = None
     stderr_excerpt: str | None = None
     note: str | None = None
+    diff: str | None = None            # unified diff of the build (review payload)
     verdict: str | None = None         # "accepted" | "rejected" (review kind only)
     verdict_reason: str | None = None
 

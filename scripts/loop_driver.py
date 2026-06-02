@@ -58,9 +58,10 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
 
 
 def write_review_task(loop_id: str, round_no: int, auftrag: str,
-                      loop_branch: str, loop_commit: str) -> str:
-    """Write an open kind:review task to B (claude reviewer). Mirrors the
-    Stage-1 envelope but adds loop_branch/loop_commit and kind=review."""
+                      loop_branch: str, loop_commit: str, diff: str = "") -> str:
+    """Write an open kind:review task to B (claude reviewer). The reviewer runs
+    headless WITHOUT tools, so it cannot check out the branch — we embed the
+    build diff in the prompt and have it judge the diff text."""
     bc.ensure_dirs()
     me = bc.this_endpoint()
     lane = bc.send_lane()
@@ -77,12 +78,15 @@ def write_review_task(loop_id: str, round_no: int, auftrag: str,
         "payload": f"{loop_branch}@{loop_commit}",
         "claimed_by": "", "claimed_at": "",
     }
+    diff_block = diff.strip() or "(kein Diff — codex meldete keine Datei-Aenderung)"
     body = (f"## Auftrag\n{auftrag}\n\n"
-            f"Hol den Branch `{loop_branch}` (Commit `{loop_commit}`):\n"
-            f"```\ngit fetch && git checkout {loop_branch}\n```\n"
-            "Reviewe den Code. Antworte mit `VERDICT: accepted` oder "
-            "`VERDICT: rejected` plus kurzer Begruendung.\n\n"
-            "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+            f"Der Bau-Agent (codex) hat auf `{loop_branch}` (Commit `{loop_commit}`) "
+            "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
+            "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
+            f"```diff\n{diff_block}\n```\n\n"
+            "Reviewe die Aenderung gegen den Auftrag. Antworte mit GENAU einer "
+            "Zeile `VERDICT: accepted` oder `VERDICT: rejected` plus kurzer "
+            "Begruendung.\n\n## Ergebnis\n<wird vom Reviewer gefuellt>\n")
     bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
                        bc.build_document(fm, body))
     return task_id
@@ -111,7 +115,8 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
                 "task_id": ""}
 
     task_id = write_review_task(loop_id, round_no, auftrag,
-                                loop_branch, a_res.commit or "")
+                                loop_branch, a_res.commit or "",
+                                diff=a_res.diff or "")
     if b_tick is not None:
         b_tick(task_id)
 

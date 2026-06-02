@@ -229,3 +229,18 @@ def test_main_build_review_requires_repo(monkeypatch, tmp_path, capsys):
     assert rc == 2  # usage error (missing --repo), distinct from 1 (not accepted)
     out = capsys.readouterr().out
     assert "repo" in out.lower()
+
+
+
+def test_review_task_embeds_diff(monkeypatch, tmp_path):
+    """write_review_task embeds the build diff in the task body (no 'fetch')."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    tid = ld.write_review_task(loop_id="loop-d", round_no=0, auftrag="do x",
+                               loop_branch="bridge/loop-d", loop_commit="c1",
+                               diff="--- a\n+++ b\n+added\n")
+    lane = bc.send_lane()
+    body = bc.read_text_utf8(bc.lane_outbox(lane) / f"task-{tid}.md")
+    assert "+added" in body
+    assert "```diff" in body
+    assert "KEINE Tools" in body

@@ -132,3 +132,26 @@ def test_codex_runner_branch_absent_is_none(monkeypatch, tmp_path):
     monkeypatch.setattr(ca, "run_codex_task", fake_task)
     res = ca._codex_runner(auftrag="x", fm={"task_id": "t-8"}, workroot=tmp_path)
     assert captured.get("branch") is None
+
+
+def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
+    """run_codex_task returns the build diff (git diff base..HEAD) on success."""
+    monkeypatch.setattr(ca, "_git_clone_or_pull",
+                        lambda r, b, w, **k: (w / ".git").mkdir(parents=True, exist_ok=True) or w)
+    monkeypatch.setattr(ca, "_git_checkout_branch", lambda w, branch: None)
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
+    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: ["scripts/runners.py"])
+    monkeypatch.setattr(ca, "_git_commit_and_push", lambda w, b, m: "abc123")
+    monkeypatch.setattr(ca, "_git_diff", lambda w, base: "--- a\n+++ b\n+new line\n")
+
+    res = ca.run_codex_task(auftrag="x", repo="r", base_branch="main",
+                            task_id="t-d", workroot=tmp_path, branch="bridge/loop-d")
+    assert res.status == "done"
+    assert res.diff == "--- a\n+++ b\n+new line\n"

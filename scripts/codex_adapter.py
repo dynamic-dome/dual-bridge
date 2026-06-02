@@ -152,6 +152,22 @@ def _git_commit_and_push(workdir: Path, branch: str, message: str) -> str:
     return commit_hash
 
 
+_DIFF_LIMIT = 60_000  # chars; over this we truncate the review payload honestly
+
+
+def _git_diff(workdir: Path, base_branch: str) -> str:
+    """Unified diff of the build vs base (origin/base...HEAD). Truncated to
+    _DIFF_LIMIT with an explicit marker (never a silent cap)."""
+    cp = _run_git(workdir, "diff", f"origin/{base_branch}...HEAD")
+    text = cp.stdout or ""
+    if len(text) > _DIFF_LIMIT:
+        text = (text[:_DIFF_LIMIT]
+                + f"\n\n[... Diff bei {_DIFF_LIMIT} Zeichen abgeschnitten "
+                  f"(Gesamtlaenge {len(cp.stdout)}); Reviewer urteilt auf dem "
+                  "gezeigten Ausschnitt ...]\n")
+    return text
+
+
 def run_codex_task(
     auftrag: str,
     repo: str,
@@ -283,8 +299,9 @@ def run_codex_task(
                                stderr_excerpt=_tail(stderr))
         return CodexResult(status="error", antwort=antwort, branch=branch,
                            changed_files=changed, error_text=msg)
+    diff = _git_diff(workdir, base_branch)
     return CodexResult(status="done", antwort=antwort, branch=branch,
-                       commit=commit, changed_files=changed)
+                       commit=commit, changed_files=changed, diff=diff)
 
 
 def _tail(text: str | None, limit: int = 2000) -> str | None:
