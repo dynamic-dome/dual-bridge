@@ -348,6 +348,39 @@ def test_resume_other_trigger_requires_changed_seed(monkeypatch, tmp_path):
     assert ok2 is True
 
 
+# --- Task 11: drift guard for mirrored dangerous patterns ---
+
+def test_dangerous_patterns_cover_secret_marker(monkeypatch, tmp_path):
+    """Our mirror MUST at least catch the sk-ant- secret marker that secret-sweep
+    catches. This is the one pattern that overlaps by contract."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("sk-ant-deadbeef") is not None
+
+
+def test_dangerous_patterns_drift_vs_secret_sweep(monkeypatch, tmp_path):
+    """If orchestrated-bridge's gate_secret_sweep.py is reachable, every literal
+    'sk-ant' / 'api_key' marker it relies on must also be covered by our mirror.
+    Skips if the source repo isn't checked out on this machine."""
+    import os
+    import pytest
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    candidates = [
+        os.path.expanduser(
+            "~/AI/Agents/demos/orchestrated-loop/src/orchestrated_loop/"
+            "gate_secret_sweep.py"),
+    ]
+    src = next((p for p in candidates if os.path.exists(p)), None)
+    if src is None:
+        pytest.skip("orchestrated-bridge secret-sweep source not present")
+    text = open(src, encoding="utf-8").read()
+    for marker in ("sk-ant", "api_key"):
+        if marker in text.lower():
+            probe = {"sk-ant": "sk-ant-x", "api_key": "api_key = 'x'"}[marker]
+            assert ld.scan_dangerous(probe) is not None, (
+                f"mirror drifted: secret-sweep covers {marker!r} but our "
+                f"DANGEROUS_PATTERNS does not")
+
+
 def test_resume_missing_escalation_fails(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     ok, _msg = ld.validate_resume("no-such-loop", new_seed_text=None)
