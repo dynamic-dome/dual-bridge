@@ -1066,6 +1066,179 @@ Write a short session note under `~/wiki/wiki/queries/YYYY-MM-DD-session-dual-br
 
 ---
 
+## Task 9: Stable loop workdir (fix cross-round continuity — REAL git)
+
+**Files:**
+- Modify: `scripts/codex_adapter.py` (`run_codex_task` workdir derivation ~185; `_codex_runner` ~289)
+- Modify: `scripts/loop_driver.py` (`_build_review_round` — pass a stable workroot)
+- Test: `scripts/test_loop_continuity_realgit.py` (create — uses a REAL local git repo, no fake_build)
+
+**Why:** The final holistic review found that `run_codex_task` derives `workdir = Path(workroot) / task_id`. Because every loop round mints a new `task_id`, every round gets a fresh non-existent workdir → `_git_clone_or_pull` always takes the clone-from-base path and the `prefer_branch` continuity path (Task 2) is never reached. codex rebuilds from base each round; only the reviewer's prompt text carries forward, not the prior code. The build-review unit tests missed this because they inject `fake_build`, which ignores `workroot`. This task fixes continuity and proves it with a REAL git repo.
+
+**Design:** `run_codex_task` gets an optional `workdir_name: str | None = None` (default → `task_id`, so Stage-1 is unchanged). For loop tasks, the workdir name is derived from the loop branch so it is STABLE across rounds. The loop passes a real `workroot`. Round 2+ then finds the existing `.git`, enters the `prefer_branch` path, resets to `origin/<loop-branch>`, and codex builds on its prior commit. Note: the subsequent `_git_checkout_branch(workdir, branch)` does `checkout -B branch` from the now-correct HEAD (already `branch`@prior-commit), which is idempotent — no change to `_git_checkout_branch` needed.
+
+- [ ] **Step 1: Write the failing REAL-git test**
+
+Create `scripts/test_loop_continuity_realgit.py`:
+
+```python
+"""Cross-round continuity proof using a REAL local git repo (no fake_build).
+This is the seam fake runners cannot exercise (P006/P009). Uses a local bare
+'origin' so no network. conftest.py isolates DUAL_BRIDGE_ROOT."""
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import codex_adapter as ca
+
+
+def _git(cwd, *args):
+    return subprocess.run(["git", "-C", str(cwd), *args],
+                          capture_output=True, text=True, encoding="utf-8",
+                          stdin=subprocess.DEVNULL)
+
+
+def _make_origin(tmp_path) -> str:
+    """Create a bare origin repo with one commit on main, return its path."""
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    subprocess.run(["git", "init", "-b", "main", str(seed)], check=True,
+                   capture_output=True)
+    _git(seed, "config", "user.email", "t@t.local")
+    _git(seed, "config", "user.name", "t")
+    (seed / "f.txt").write_text("base\n", encoding="utf-8")
+    _git(seed, "add", "-A")
+    _git(seed, "commit", "-m", "base")
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "--bare", str(seed), str(bare)],
+                   check=True, capture_output=True)
+    return str(bare)
+
+
+def _fake_codex_appends(monkeypatch, line_holder):
+    """Patch codex's subprocess so 'codex' appends a line to f.txt in the
+    workdir (a real file change → real commit), and writes an answer. Returns
+    the changed-file so the commit/push path runs for real."""
+    real_run = ca.subprocess.run
+
+    def fake_run(cmd, **kw):
+        # cmd is the codex exec invocation with -C <workdir>
+        cwd = kw.get("cwd")
+        workdir = Path(cwd)
+        # append a unique line so each round makes a real, distinct change
+        f = workdir / "f.txt"
+        f.write_text(f.read_text(encoding="utf-8") + line_holder[0] + "\n",
+                     encoding="utf-8")
+        class _P:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        # write the -o answer file if requested
+        for i, tok in enumerate(cmd):
+            if tok == "-o":
+                Path(cmd[i + 1]).write_text("done", encoding="utf-8")
+        return _P()
+
+    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+
+def test_round2_builds_on_round1_commit(monkeypatch, tmp_path):
+    """Two real codex builds on the SAME stable workdir + loop branch: round 2
+    must start from round 1's commit (f.txt keeps round-1's line), not base."""
+    origin = _make_origin(tmp_path)
+    workroot = tmp_path / "work"
+    line = ["round1-line"]
+    _fake_codex_appends(monkeypatch, line)
+
+    # Round 1: fresh clone from main, build on the loop branch, push.
+    r1 = ca.run_codex_task(auftrag="build", repo=origin, base_branch="main",
+                           task_id="t1", workroot=workroot,
+                           branch="bridge/loop-X", workdir_name="loop-X")
+    assert r1.status == "done", r1.error_text
+    assert r1.commit
+
+    # Round 2: SAME workdir_name → existing .git → prefer_branch pulls the loop
+    # branch → round 2 sees round 1's f.txt and adds to it.
+    line[0] = "round2-line"
+    r2 = ca.run_codex_task(auftrag="build more", repo=origin, base_branch="main",
+                           task_id="t2", workroot=workroot,
+                           branch="bridge/loop-X", workdir_name="loop-X")
+    assert r2.status == "done", r2.error_text
+    assert r2.commit and r2.commit != r1.commit
+
+    # PROOF: the workdir's f.txt contains BOTH round lines → continuity holds.
+    workdir = workroot / "loop-X"
+    content = (workdir / "f.txt").read_text(encoding="utf-8")
+    assert "round1-line" in content, "round 2 lost round 1's work (continuity broken)"
+    assert "round2-line" in content
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest test_loop_continuity_realgit.py -v`
+Expected: FAIL — `run_codex_task() got an unexpected keyword argument 'workdir_name'`.
+
+- [ ] **Step 3: Add `workdir_name` to `run_codex_task`**
+
+In `run_codex_task`, add the parameter after `branch`:
+```python
+    branch: str | None = None,
+    workdir_name: str | None = None,
+```
+Change the workdir derivation line `workdir = Path(workroot) / task_id` to:
+```python
+    workdir = Path(workroot) / (workdir_name or task_id)
+```
+
+- [ ] **Step 4: Forward it in `_codex_runner`**
+
+In `_codex_runner`, pass a loop-stable name when the task carries a loop branch. After the existing `branch=fm.get("branch"),` line in the `run_codex_task(...)` call, add:
+```python
+        workdir_name=fm.get("workdir_name"),
+```
+And the loop will set `fm["workdir_name"]` (next step). For non-loop tasks `fm.get("workdir_name")` is `None` → defaults to `task_id` (Stage-1 unchanged).
+
+- [ ] **Step 5: Make the loop pass a stable workroot + workdir_name**
+
+In `scripts/loop_driver.py` `_build_review_round`, the `fm` dict (currently `{"task_id": ..., "repo": repo, "base_branch": base_branch, "branch": loop_branch}`) gains a stable workdir name, and the build call passes a real workroot derived from loop_id. Replace the build setup:
+```python
+    loop_branch = f"bridge/{loop_id}"
+    fm = {"task_id": bc.make_task_id(), "repo": repo,
+          "base_branch": base_branch, "branch": loop_branch,
+          "workdir_name": loop_id}
+    workroot = STATE_DIR / "work"
+    try:
+        a_res = build_runner(auftrag=auftrag, fm=fm, workroot=workroot)
+```
+(`STATE_DIR / "work"` is local, gitignored under `scripts/state/`. `workdir_name=loop_id` is stable across rounds, so round 2+ reuses `STATE_DIR/work/<loop_id>`.)
+
+- [ ] **Step 6: Run the real-git test + full suite**
+
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest test_loop_continuity_realgit.py -v`
+Expected: PASS — both round lines present (continuity holds).
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest -q`
+Expected: ALL pass (Stage-1 + build-review unit tests + the new real-git test). The build-review fakes ignore `workroot`, so they stay green; Stage-1 codex path defaults `workdir_name` to `task_id`, unchanged.
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd C:/Users/domes/AI/dual-bridge
+git add scripts/codex_adapter.py scripts/loop_driver.py scripts/test_loop_continuity_realgit.py
+git commit -m "fix(loop): stable loop workdir so codex builds on its prior commit
+
+run_codex_task derived workdir from task_id; each round had a new task_id, so
+the prefer_branch continuity path was never reached and codex rebuilt from base.
+Add workdir_name (default task_id → Stage-1 unchanged); the loop passes loop_id
+as a stable name + a real workroot. Proven with a REAL local-git test that fakes
+could not catch.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+---
+
 ## Self-Review (completed by plan author)
 
 **Spec coverage:**

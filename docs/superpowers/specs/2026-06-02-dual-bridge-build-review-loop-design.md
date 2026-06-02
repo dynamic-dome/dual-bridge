@@ -52,6 +52,17 @@ task_id-abgeleitete Verhalten → **Stage 1 bleibt regressionsfrei**. (Weg B —
 base, Kontext nur im Auftragstext — wurde verworfen: verschenkt Vorrunden-Arbeit, skaliert
 schlecht über 2-3 Runden.)
 
+**Nachtrag (Befund aus dem finalen holistischen Review, 2026-06-02):** Der `branch`-Override
+allein genügt NICHT für die Kontinuität. `run_codex_task` leitet den Arbeits-Ordner als
+`workdir = workroot / task_id` ab. Da jede Runde eine neue `task_id` hat, bekommt jede Runde
+einen frischen, nicht-existierenden Ordner → `_git_clone_or_pull` nimmt den Clone-Pfad (frisch
+von base) und der `prefer_branch`-Pfad (Runde-2-Kontinuität) wird NIE erreicht. Damit baute
+codex faktisch jede Runde von base neu — die Reviewer-Gaps reisten nur im Prompt, nicht im Code.
+**Korrektur:** Der Loop muss einen **stabilen, loop-id-abgeleiteten Arbeits-Ordner** über alle
+Runden verwenden (nicht task-id-abgeleitet), damit Runde 2+ den existing-`.git`-Pfad +
+`prefer_branch` trifft. Bewiesen mit einem **echten-git**-Test (nicht `fake_build` — genau diese
+Seam prüfen Fakes nicht; P006/P009). Siehe Plan-Task 9.
+
 **Scope-Abgrenzung:** Diese Spec ist **Stage 2b** und baut auf dem fertigen Stage-2a-Fundament
 auf. Der Overnight-Scheduler, freie Arbeits-Loops mit offenem Ziel und Auto-Merge sind **Stufe 3**
 (eigene Spec).
