@@ -150,6 +150,7 @@ def run_codex_task(
     workroot: Path,
     codex_bin: str | None = None,
     timeout: int = 600,
+    branch: str | None = None,
 ) -> CodexResult:
     """Run one task end-to-end on Laptop B. Every path returns a CodexResult
     with status done|error -- never raises to the caller (spec section 5: no
@@ -162,7 +163,7 @@ def run_codex_task(
             return CodexResult(status="error",
                                error_text=f"repo nicht in allowlist abgelehnt: {repo}")
 
-    branch = f"bridge/task-{task_id}"
+    branch = branch or f"bridge/task-{task_id}"
 
     # 1. codex on PATH?
     codex_exe = codex_bin or shutil.which("codex")
