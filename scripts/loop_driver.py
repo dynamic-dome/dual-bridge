@@ -261,6 +261,47 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
             "commit": a_res.commit, "task_id": task_id}
 
 
+def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
+                             repo, base_branch, build_runner, round_timeout,
+                             interval=5, b_tick=None):
+    """One goal-loop build→review round. Like _build_review_round but the review
+    task lists the done-criteria (write_goal_review_task)."""
+    loop_branch = f"bridge/{loop_id}"
+    fm = {"task_id": bc.make_task_id(), "repo": repo,
+          "base_branch": base_branch, "branch": loop_branch,
+          "workdir_name": loop_id}
+    workroot = STATE_DIR / "work"
+    try:
+        a_res = build_runner(auftrag=auftrag, fm=fm, workroot=workroot)
+    except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
+        return {"status": "error", "abort_reason": f"A-build crash: {exc}",
+                "verdict": None, "verdict_reason": None, "commit": None,
+                "diff": "", "task_id": ""}
+    if a_res.status != "done":
+        return {"status": "error",
+                "abort_reason": f"A-build error: {a_res.error_text}",
+                "verdict": None, "verdict_reason": None, "commit": None,
+                "diff": "", "task_id": ""}
+    task_id = write_goal_review_task(loop_id, round_no, goal, done_criteria,
+                                     loop_branch, a_res.commit or "",
+                                     diff=a_res.diff or "")
+    if b_tick is not None:
+        b_tick(task_id)
+    fm_result = wait_for_result(task_id, timeout=round_timeout, interval=interval)
+    if fm_result is None:
+        return {"status": "timeout", "abort_reason": f"timeout in round {round_no}",
+                "verdict": None, "verdict_reason": None,
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    if fm_result.get("status") == "error":
+        return {"status": "error", "abort_reason": f"B error in round {round_no}",
+                "verdict": None, "verdict_reason": None,
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    return {"status": "done", "abort_reason": "",
+            "verdict": fm_result.get("verdict"),
+            "verdict_reason": fm_result.get("verdict_reason"),
+            "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+
+
 def _is_conflict_copy(name: str) -> bool:
     # Same heuristic as handoff_poll._is_conflict_copy / handoff_collect.
     return "(" in name and ")" in name
@@ -374,6 +415,87 @@ def read_escalation(loop_id: str) -> dict | None:
         return None
     fm, _body = bc.parse_frontmatter(path.read_text(encoding="utf-8"))
     return fm
+
+
+def _escalate(loop_id, trigger, round_no, branch, commit, goal, done_criteria,
+              prev_commit, reason, question, met_criteria=None):
+    """Write the escalation file for any of the four triggers."""
+    met = set(met_criteria or [])
+    criteria_status = [(c, c in met) for c in done_criteria]
+    progress = (f"Letzter Commit: {commit or '(keiner)'} auf {branch}. "
+                f"Runde {round_no}.")
+    write_escalation(loop_id=loop_id, trigger=trigger, round_no=round_no,
+                     branch=branch, commit=commit or "", goal=goal,
+                     criteria_status=criteria_status, reason=reason,
+                     question=question, progress=progress)
+
+
+def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
+                  round_timeout, interval=5, build_runner=None, b_tick=None,
+                  loop_id=None):
+    """Free work-loop toward an open goal (Stage 3). A builds (codex) on a
+    stable loop branch toward `goal`; B reviews the diff against `done_criteria`
+    (kind:review → accepted | rejected | escalate). accepted ends successfully.
+    rejected feeds the reviewer's gaps into the next build. Four triggers
+    escalate (write ESCALATION + stop, nonzero): reviewer escalate, stagnation,
+    max-rounds, dangerous-action. `loop_id` lets resume reuse the same branch.
+    Returns a summary dict."""
+    if build_runner is None:
+        build_runner = runners.RUNNERS["codex"]
+    if loop_id is None:
+        loop_id = _next_loop_id()
+    loop_branch = f"bridge/{loop_id}"
+    base_auftrag = (f"Ziel: {goal}\n\nDone-Kriterien:\n"
+                    + "\n".join(f"- {c}" for c in done_criteria))
+    current_auftrag = base_auftrag
+    rounds_done = 0
+    accepted = False
+    escalated = False
+    escalation_trigger = ""
+    final_commit = ""
+    prev_commit = None
+    prev_reason = None
+
+    def _summary():
+        return {
+            "loop_id": loop_id, "rounds_done": rounds_done, "accepted": accepted,
+            "escalated": escalated, "escalation_trigger": escalation_trigger,
+            "final_commit": final_commit, "final_branch": loop_branch,
+        }
+
+    for round_no in range(max_rounds):
+        out = _goal_build_review_round(
+            loop_id=loop_id, round_no=round_no, goal=goal,
+            done_criteria=done_criteria, auftrag=current_auftrag, repo=repo,
+            base_branch=base_branch, build_runner=build_runner,
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+        append_state(loop_id, {"round": round_no, "side": "goal-loop",
+                               "verdict": out.get("verdict"),
+                               "verdict_reason": out.get("verdict_reason"),
+                               "commit": out.get("commit"),
+                               "status": out["status"]})
+        if out["status"] != "done":
+            # transport/build failure — treat as stagnation-style escalation
+            escalated = True
+            escalation_trigger = "stagnation"
+            _escalate(loop_id, "stagnation", round_no, loop_branch,
+                      out.get("commit") or final_commit, goal, done_criteria,
+                      prev_commit, reason=out.get("abort_reason", "round failed"),
+                      question="Der Loop konnte nicht fortfahren. Bitte pruefen.")
+            break
+        rounds_done += 1
+        final_commit = out.get("commit") or final_commit
+
+        if out["verdict"] == "accepted":
+            accepted = True
+            break
+        # (escalate / stagnation / dangerous handled in later tasks)
+        prev_commit = out.get("commit")
+        reason = out.get("verdict_reason")
+        prev_reason = reason
+        current_auftrag = (f"{base_auftrag}\n\nDer Reviewer hat abgelehnt. "
+                           f"Behebe:\n{reason or '(keine Begruendung)'}")
+    return _summary()
 
 
 def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,

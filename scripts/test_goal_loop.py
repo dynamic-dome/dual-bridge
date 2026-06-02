@@ -151,3 +151,46 @@ def test_write_and_read_escalation_roundtrip(monkeypatch, tmp_path):
 def test_read_escalation_missing_returns_none(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     assert ld.read_escalation("does-not-exist") is None
+
+
+# --- Task 6: run_goal_loop accepted ---
+
+def _fake_build_factory(commit_seq):
+    """Return a fake build_runner that yields commits from commit_seq in order."""
+    from runners import RunnerResult
+    calls = {"i": 0}
+
+    def fake_build(auftrag, fm, workroot):
+        i = calls["i"]
+        calls["i"] += 1
+        commit = commit_seq[min(i, len(commit_seq) - 1)]
+        return RunnerResult(status="done", antwort="built", branch=fm["branch"],
+                            commit=commit, changed_files=["greet.py"],
+                            diff="+def greet(name): return f'Hi {name}'")
+    return fake_build
+
+
+def _b_verdict(verdict, reason="r"):
+    """Return a b_tick that writes a review result with the given verdict."""
+    def tick(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": verdict, "verdict_reason": reason}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, f"## Antwort\nVERDICT: {verdict}\n"))
+    return tick
+
+
+def test_goal_loop_accepted_round_one(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    summary = ld.run_goal_loop(
+        goal="Add greet util", done_criteria=["greet works"],
+        repo="r", base_branch="main", max_rounds=3, round_timeout=5,
+        interval=1, build_runner=_fake_build_factory(["c1"]),
+        b_tick=_b_verdict("accepted"))
+    assert summary["accepted"] is True
+    assert summary["escalated"] is False
+    assert summary["final_commit"] == "c1"
+    assert summary["final_branch"].startswith("bridge/loop-")
