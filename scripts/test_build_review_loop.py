@@ -226,6 +226,6 @@ def test_main_build_review_requires_repo(monkeypatch, tmp_path, capsys):
                         lambda: tmp_path / "x.lock")
     rc = ld.main(["--mode", "build-review", "--max-rounds", "1",
                   "--seed", "build it"])
-    assert rc != 0
+    assert rc == 2  # usage error (missing --repo), distinct from 1 (not accepted)
     out = capsys.readouterr().out
     assert "repo" in out.lower()

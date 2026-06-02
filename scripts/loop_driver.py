@@ -359,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_rounds=args.max_rounds, round_timeout=args.round_timeout,
                 interval=args.interval, build_runner=None, b_tick=None)
         except KeyboardInterrupt:
-            print("\n[A] Strg+C — Loop abgebrochen.")
+            print("\n[A] Strg+C -- Loop abgebrochen.")
             return 1
         print("=" * 60)
         print(f"[A] Build-Review-Loop {summary['loop_id']} fertig.")
