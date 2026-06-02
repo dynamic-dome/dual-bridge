@@ -93,7 +93,7 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
     """One build→review round. A builds via build_runner (codex), writes a
     kind:review task to B, waits for B's verdict. Returns an outcome dict.
     `b_tick(task_id)` is a test hook; in production B is a separate poller."""
-    loop_branch = f"bridge/loop-{loop_id}"
+    loop_branch = f"bridge/{loop_id}"
     fm = {"task_id": bc.make_task_id(), "repo": repo,
           "base_branch": base_branch, "branch": loop_branch}
     try:
@@ -186,7 +186,7 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
         "loop_id": loop_id, "rounds_done": rounds_done, "accepted": accepted,
         "final_commit": final_commit, "aborted": aborted,
         "abort_reason": abort_reason, "open_task_id": open_task_id,
-        "final_branch": f"bridge/loop-{loop_id}",
+        "final_branch": f"bridge/{loop_id}",
     }
 
 
