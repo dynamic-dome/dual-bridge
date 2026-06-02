@@ -155,6 +155,8 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
     abort_reason = ""
     final_commit = ""
     open_task_id = ""
+    prev_commit = None
+    prev_reason = None
 
     for round_no in range(max_rounds):
         out = _build_review_round(
@@ -173,12 +175,21 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
             break
         rounds_done += 1
         final_commit = out.get("commit") or final_commit
+        if prev_commit is not None and out.get("commit") == prev_commit:
+            aborted, abort_reason = True, "stagniert (kein neuer Commit)"
+            break
+        prev_commit = out.get("commit")
         if out["verdict"] == "accepted":
             accepted = True
             break
-        # rejected → feed the gaps into the next build
+        # rejected
+        reason = out.get("verdict_reason")
+        if prev_reason is not None and reason == prev_reason:
+            aborted, abort_reason = True, "stagniert (Reviewer wiederholt sich)"
+            break
+        prev_reason = reason
         current_auftrag = (f"{auftrag}\n\nDer Reviewer hat abgelehnt. Behebe:\n"
-                           f"{out.get('verdict_reason') or '(keine Begruendung)'}")
+                           f"{reason or '(keine Begruendung)'}")
     else:
         aborted, abort_reason = True, "max-rounds erreicht, nicht akzeptiert"
 

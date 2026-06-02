@@ -136,3 +136,83 @@ def test_loop_max_rounds_without_accept(monkeypatch, tmp_path):
     assert summary["aborted"] is True
     assert summary["rounds_done"] == 2
     assert "max-rounds" in summary["abort_reason"]
+
+
+def test_loop_aborts_on_unchanged_commit(monkeypatch, tmp_path):
+    """Same commit hash two rounds running → early 'stagniert' abort."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    def fake_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit="SAME", changed_files=[])  # never changes
+
+    def b_reject(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "rejected", "verdict_reason": f"r{task_id[-2:]}"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "VERDICT: rejected\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=5,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_reject)
+    assert summary["accepted"] is False
+    assert summary["aborted"] is True
+    assert "stagn" in summary["abort_reason"].lower()
+    assert summary["rounds_done"] == 2  # round 0 built, round 1 same commit → abort
+
+
+def test_loop_aborts_on_repeated_reason(monkeypatch, tmp_path):
+    """Identical verdict_reason two rounds running → early 'stagniert' abort."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    n = iter(range(100))
+    def fake_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit=f"c{next(n)}", changed_files=["a.py"])
+
+    def b_reject_same(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "rejected",
+              "verdict_reason": "always the same"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "VERDICT: rejected\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=5,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_reject_same)
+    assert summary["aborted"] is True
+    assert "stagn" in summary["abort_reason"].lower()
+    assert summary["rounds_done"] == 2
+
+
+def test_loop_missing_verdict_is_not_accepted(monkeypatch, tmp_path):
+    """A result with no verdict field (None) must NOT count as accepted."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    n = iter(range(100))
+    def fake_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit=f"c{next(n)}", changed_files=["a.py"])
+
+    def b_no_verdict(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review"}  # NO verdict key
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "no marker here\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=2,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_no_verdict)
+    assert summary["accepted"] is False  # None verdict never accepts
