@@ -393,18 +393,30 @@ def write_escalation(loop_id: str, trigger: str, round_no: int, branch: str,
                      criteria_status: list[tuple[str, bool]], reason: str,
                      question: str, progress: str):
     """Write ESCALATION-<loop_id>.md (the durable escalation artefact). Returns
-    the path. `criteria_status` is a list of (criterion, met) pairs."""
+    the path. `criteria_status` is a list of (criterion, met) pairs. NOTE: the
+    loop does not yet machine-capture per-criterion status from the reviewer, so
+    we render the criteria as a plain list and do NOT emit '[x]'/'[ ]' checkboxes
+    that would assert a met/unmet state the loop never measured (would mislead
+    the resuming owner). The `met` flags are accepted for forward-compat with a
+    future per-criterion tracker but are only surfaced when a criterion is
+    actually marked met."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     fm = {
         "loop_id": loop_id, "trigger": trigger, "round": str(round_no),
         "branch": branch, "commit": commit, "exit_reason": "escalation",
         "created": bc.now_iso(),
     }
-    crit_lines = "\n".join(
-        f"- [{'x' if met else ' '}] {name}" for name, met in criteria_status)
+    any_met = any(met for _name, met in criteria_status)
+    if any_met:
+        crit_lines = "\n".join(
+            f"- [{'x' if met else ' '}] {name}" for name, met in criteria_status)
+    else:
+        # No machine-measured progress — list honestly, no checkbox theatre.
+        crit_lines = "\n".join(f"- {name}" for name, _met in criteria_status)
     body = (
         f"## Ziel (aus dem Seed)\n{goal}\n\n"
-        f"## Done-Kriterien — Stand\n{crit_lines}\n\n"
+        f"## Done-Kriterien (Stand vom Reviewer nicht maschinell erfasst)\n"
+        f"{crit_lines}\n\n"
         f"## Eskalations-Grund\n{reason}\n\n"
         f"## Offene Frage an den Owner\n{question}\n\n"
         f"## Zwischenstand\n{progress}\n")
@@ -530,7 +542,13 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                       question="Der Bau kommt nicht voran. Seed schaerfen "
                                "(klarere Kriterien) + --resume.")
             break
-        if prev_reason is not None and reason == prev_reason:
+        # Repeated-reason stagnation only fires on a NON-empty repeated reason.
+        # In production parse_verdict returns ('rejected', '') for every reject,
+        # so '' == '' would otherwise spuriously escalate after two rejected
+        # rounds even while codex makes real, differentiated progress (the
+        # same-commit guard above already catches genuine no-progress). Empty
+        # reasons carry no signal — skip them.
+        if prev_reason and reason and reason == prev_reason:
             escalated = True
             escalation_trigger = "stagnation"
             _escalate(loop_id, "stagnation", round_no, loop_branch, commit,

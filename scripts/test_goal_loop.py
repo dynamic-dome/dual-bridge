@@ -385,3 +385,49 @@ def test_resume_missing_escalation_fails(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     ok, _msg = ld.validate_resume("no-such-loop", new_seed_text=None)
     assert ok is False
+
+
+# --- Review follow-ups (I-1, I-2) ---
+
+def test_goal_loop_empty_reason_no_false_stagnation(monkeypatch, tmp_path):
+    """I-2: in production parse_verdict returns ('rejected', '') for EVERY
+    rejected verdict. Two rejected rounds with empty reason but DISTINCT commits
+    must NOT trip the repeated-reason stagnation guard ('' == '' is not
+    stagnation). Healthy progress (distinct commits) should keep iterating to
+    max-rounds, not escalate as stagnation on round 2."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+
+    def b_empty_reason(task_id):
+        # Mirror production: rejected with empty verdict_reason.
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "rejected", "verdict_reason": ""}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "## Antwort\nVERDICT: rejected\n"))
+
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c2", "c3"]),
+        b_tick=b_empty_reason)
+    # Distinct commits + empty reasons → no stagnation; runs to max-rounds.
+    assert summary["escalation_trigger"] == "max_rounds"
+    assert summary["rounds_done"] == 3
+
+
+def test_escalation_file_no_misleading_checkboxes(monkeypatch, tmp_path):
+    """I-1: per-criterion status is not machine-captured from the reviewer, so
+    the escalation file must NOT render checked '[x]' boxes that assert
+    progress the loop never measured. It lists the criteria honestly instead."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    path = ld.write_escalation(
+        loop_id="loop-i1", trigger="stagnation", round_no=1,
+        branch="bridge/loop-i1", commit="c1", goal="G",
+        criteria_status=[("crit one", False), ("crit two", False)],
+        reason="stuck", question="sharpen?", progress="p")
+    text = path.read_text(encoding="utf-8")
+    assert "crit one" in text and "crit two" in text
+    # No checkbox claims either way — neither falsely-met nor checkbox theatre.
+    assert "[x]" not in text
