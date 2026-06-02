@@ -29,6 +29,21 @@ def test_parse_ndjson_multi_event_returns_last_answer() -> None:
     print("  codex OK — multi-event NDJSON -> last item.completed answer")
 
 
+def test_parse_ndjson_standard_codex_sequence_skips_turn_completed() -> None:
+    """Real codex JSONL commonly ends with turn.completed after the message.
+    The parser must skip that non-answer event and return the agent message."""
+    import codex_adapter as cx
+    importlib.reload(cx)
+    raw = (
+        '{"type":"thread.started","thread_id":"t"}\n'
+        '{"type":"turn.started"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"PING"}}\n'
+        '{"type":"turn.completed","usage":{"input_tokens":1}}\n'
+    )
+    assert cx.parse_codex_output(raw) == "PING"
+    print("  codex OK — standard JSONL sequence skips trailing turn.completed")
+
+
 def test_parse_single_json_object_unchanged() -> None:
     """A single JSON object stays backward-compatible (no NDJSON misread)."""
     import codex_adapter as cx
@@ -131,6 +146,7 @@ def main() -> int:
     print("=== QW1 Codex-Adapter NDJSON-Tests ===")
     tests = [
         test_parse_ndjson_multi_event_returns_last_answer,
+        test_parse_ndjson_standard_codex_sequence_skips_turn_completed,
         test_parse_single_json_object_unchanged,
         test_parse_pretty_printed_single_json_with_newlines,
         test_parse_plain_text_unchanged,
