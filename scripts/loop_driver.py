@@ -142,9 +142,10 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
                           b_tick=None):
     """Asymmetric build↔review loop. A builds (codex) on a stable loop branch,
     B reviews (claude, kind:review → verdict). accepted ends; rejected feeds the
-    reviewer's gaps into the next build. Bounded by max_rounds; stagnation guard
-    added in the next task. `build_runner` defaults to the registered codex
-    runner; tests inject a fake. Returns a summary dict."""
+    reviewer's gaps into the next build. Bounded by max_rounds, plus an early
+    stagnation abort when the build commit is unchanged or the reviewer's reason
+    repeats. `build_runner` defaults to the registered codex runner; tests inject
+    a fake. Returns a summary dict."""
     if build_runner is None:
         build_runner = runners.RUNNERS["codex"]
     loop_id = _next_loop_id()
@@ -175,6 +176,8 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
             break
         rounds_done += 1
         final_commit = out.get("commit") or final_commit
+        # Unchanged commit wins over a late accept: the verdict already applied
+        # to this exact commit, so nothing new happened this round.
         if prev_commit is not None and out.get("commit") == prev_commit:
             aborted, abort_reason = True, "stagniert (kein neuer Commit)"
             break
