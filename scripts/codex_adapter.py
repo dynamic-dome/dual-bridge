@@ -161,6 +161,7 @@ def run_codex_task(
     codex_bin: str | None = None,
     timeout: int = 600,
     branch: str | None = None,
+    workdir_name: str | None = None,
 ) -> CodexResult:
     """Run one task end-to-end on Laptop B. Every path returns a CodexResult
     with status done|error -- never raises to the caller (spec section 5: no
@@ -182,7 +183,7 @@ def run_codex_task(
                            error_text="codex nicht gefunden -- auf B installiert/im PATH?")
 
     # 2. repo reachable?
-    workdir = Path(workroot) / task_id
+    workdir = Path(workroot) / (workdir_name or task_id)
     try:
         _git_clone_or_pull(repo, base_branch, workdir, prefer_branch=branch)
     except RuntimeError as exc:
@@ -312,6 +313,7 @@ def _codex_runner(auftrag: str, fm: dict, workroot):
         codex_bin=os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None,
         timeout=int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600")),
         branch=fm.get("branch"),
+        workdir_name=fm.get("workdir_name"),
     )
 
 

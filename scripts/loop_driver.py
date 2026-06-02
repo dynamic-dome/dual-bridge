@@ -95,9 +95,11 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
     `b_tick(task_id)` is a test hook; in production B is a separate poller."""
     loop_branch = f"bridge/{loop_id}"
     fm = {"task_id": bc.make_task_id(), "repo": repo,
-          "base_branch": base_branch, "branch": loop_branch}
+          "base_branch": base_branch, "branch": loop_branch,
+          "workdir_name": loop_id}
+    workroot = STATE_DIR / "work"
     try:
-        a_res = build_runner(auftrag=auftrag, fm=fm, workroot=None)
+        a_res = build_runner(auftrag=auftrag, fm=fm, workroot=workroot)
     except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
         return {"status": "error", "abort_reason": f"A-build crash: {exc}",
                 "verdict": None, "verdict_reason": None, "commit": None,
