@@ -95,3 +95,30 @@ def test_write_goal_review_task_embeds_criteria_and_three_markers(
     assert "VERDICT: rejected" in text
     assert "VERDICT: escalate" in text
     assert "+def greet(): ..." in text
+
+
+# --- Task 4: scan_dangerous ---
+
+def test_scan_dangerous_flags_force_push(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("git push --force origin main") is not None
+
+
+def test_scan_dangerous_flags_drop_table(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("DROP TABLE users;") is not None
+
+
+def test_scan_dangerous_flags_rm_rf(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("rm -rf /home/x") is not None
+
+
+def test_scan_dangerous_flags_secret(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("token = 'sk-ant-abc123'") is not None
+
+
+def test_scan_dangerous_clean_passes(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    assert ld.scan_dangerous("def greet(name):\n    return f'Hi {name}'") is None

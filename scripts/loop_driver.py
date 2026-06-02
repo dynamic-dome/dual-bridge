@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -66,6 +67,36 @@ def parse_seed(seed_text: str) -> tuple[str, list[str]]:
     if not criteria:
         raise ValueError("seed has no done-criteria under '## Done-Kriterien'")
     return goal, criteria
+
+
+# Deny-first patterns — mirrored from orchestrated-bridge's secret-sweep
+# (gate_secret_sweep.py) + a few destructive shell/SQL patterns. Mirrored, not
+# imported, because the gate lives in a separate repo; a later task adds a drift
+# test that fails if the mirror falls behind. A hit escalates (trigger:
+# dangerous_action) — never a cross-device gate roundtrip (latency dead-end).
+DANGEROUS_PATTERNS = [
+    r"push\s+.*--force",
+    r"push\s+--force",
+    r"\bforce-push\b",
+    r"\bDROP\s+TABLE\b",
+    r"\bDELETE\s+FROM\b",
+    r"\brm\s+-rf\b",
+    r"sk-ant-[A-Za-z0-9_-]+",
+    r"\bapi[_-]?key\b\s*[=:]",
+]
+_DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
+
+
+def scan_dangerous(text: str) -> str | None:
+    """Return the first dangerous pattern found in `text`, or None if clean.
+    Deny-first: used by the goal-loop to escalate (NOT block) risky build
+    actions/diffs locally, without any cross-device gate roundtrip."""
+    if not text:
+        return None
+    for pat, rx in zip(DANGEROUS_PATTERNS, _DANGEROUS_RE):
+        if rx.search(text):
+            return pat
+    return None
 
 
 def append_state(loop_id: str, record: dict) -> None:
