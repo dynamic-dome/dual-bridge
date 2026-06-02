@@ -290,9 +290,165 @@ def test_f1_double_claim_one_result() -> None:
     print("  F1 OK — Doppel-Claim: kein Result-Overwrite, Task archiviert statt stuck")
 
 
+# --- QW3: env allowlist + QW2: UTF-8 runtime / OEM decode --------------------
+import contextlib
+
+
+@contextlib.contextmanager
+def _env(**overrides):
+    """Snapshot+restore the named env vars around a block (conftest only
+    snapshots DUAL_BRIDGE_*, so we restore arbitrary vars ourselves)."""
+    saved = {k: os.environ.get(k) for k in overrides}
+    try:
+        for k, v in overrides.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        yield
+    finally:
+        for k, old in saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
+
+
+def test_safe_env_drops_api_keys() -> None:
+    """QW3: secret keys present in os.environ must never reach a child env.
+    Allowlist-only build leaks none of ANTHROPIC/OPENAI/GITHUB credentials."""
+    import bridge_common as bc
+    keys = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN",
+            "ANTHROPIC_AUTH_TOKEN")
+    with _env(**{k: "leak-me-please" for k in keys}):
+        env = bc.safe_subprocess_env()
+    for var in keys:
+        assert var not in env, f"{var} leaked into subprocess env"
+    print("  QW3 OK — API-/Token-Keys nicht im Child-Env")
+
+
+def test_safe_env_drops_secret_despite_allowed_prefix() -> None:
+    """Codex-Verifier Q1: a secret that matches a broad allow-prefix (e.g.
+    GIT_TOKEN via GIT_, or a *_SECRET) must still be dropped by the secret
+    denylist. The broad prefix must not become a credential bypass."""
+    import bridge_common as bc
+    leaky = ("GIT_TOKEN", "GIT_ASKPASS_SECRET", "PYTHON_API_KEY",
+             "PATH_CREDENTIAL", "GIT_HUB_PASSWORD",
+             # Q1 round 3: GIT_HTTP_EXTRAHEADER can carry an Authorization header.
+             "GIT_HTTP_EXTRAHEADER")
+    with _env(**{k: "leak-me" for k in leaky}):
+        env = bc.safe_subprocess_env()
+    for var in leaky:
+        assert var not in env, f"{var} leaked despite secret denylist"
+    print("  Q1 OK — Secrets mit erlaubtem Prefix werden trotzdem gedroppt")
+
+
+def test_safe_env_drops_oauth_bearer_pat_variants() -> None:
+    """Codex-Verifier Q1 round 2: bare KEY / OAuth / bearer / PAT naming that
+    matches GIT_/PYTHON_ prefixes but lacks the obvious TOKEN/SECRET substring."""
+    import bridge_common as bc
+    leaky = ("GIT_BEARER", "GIT_OAUTH", "PYTHON_KEY", "GIT_DEPLOY_PAT",
+             "GIT_AUTHORIZATION")
+    with _env(**{k: "leak-me" for k in leaky}):
+        env = bc.safe_subprocess_env()
+    for var in leaky:
+        assert var not in env, f"{var} leaked (Q1 round 2)"
+    print("  Q1.2 OK — OAuth/bearer/PAT/bare-KEY Varianten gedroppt")
+
+
+def test_safe_env_ssh_auth_sock_survives_secret_denylist() -> None:
+    """Regression for the denylist: SSH_AUTH_SOCK contains 'AUTH' but is a
+    legitimate transport var and must NOT be killed by the secret filter."""
+    import bridge_common as bc
+    with _env(SSH_AUTH_SOCK="/tmp/agent.sock"):
+        env = bc.safe_subprocess_env()
+    assert env.get("SSH_AUTH_SOCK") == "/tmp/agent.sock", \
+        "SSH_AUTH_SOCK faelschlich vom Secret-Filter entfernt"
+    print("  Q1/Q4 OK — SSH_AUTH_SOCK ueberlebt trotz 'AUTH' im Namen")
+
+
+def test_safe_env_keeps_git_transport_vars() -> None:
+    """Codex-Verifier Q4: SSH-agent / proxy / cert vars must survive so git
+    over SSH-agent or HTTPS-proxy/corporate-cert does not silently break."""
+    import bridge_common as bc
+    transport = {"SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+                 "HTTPS_PROXY": "http://proxy.corp:8080",
+                 "SSL_CERT_FILE": r"C:\certs\corp.pem"}
+    with _env(**transport):
+        env = bc.safe_subprocess_env()
+    for var, val in transport.items():
+        assert env.get(var) == val, f"{var} dropped — git transport would break"
+    print("  Q4 OK — SSH/Proxy/Cert-Transport-Vars bleiben erhalten")
+
+
+def test_safe_env_keeps_appdata_localappdata() -> None:
+    """QW3 (auth-path protection): APPDATA + LOCALAPPDATA must survive the
+    allowlist — without them claude/codex/node run UNAUTHENTICATED."""
+    import bridge_common as bc
+    with _env(APPDATA=r"C:\Users\test\AppData\Roaming",
+              LOCALAPPDATA=r"C:\Users\test\AppData\Local"):
+        env = bc.safe_subprocess_env()
+    assert env.get("APPDATA") == r"C:\Users\test\AppData\Roaming"
+    assert env.get("LOCALAPPDATA") == r"C:\Users\test\AppData\Local"
+    print("  QW3 OK — APPDATA/LOCALAPPDATA bleiben erhalten (Auth-Pfad)")
+
+
+def test_safe_env_keeps_path() -> None:
+    """QW3: PATH must be present and non-empty, else the child cannot find its
+    exe (or sub-sub tools like git inside codex)."""
+    import bridge_common as bc
+    with _env(PATH=os.environ.get("PATH") or r"C:\Windows\System32"):
+        env = bc.safe_subprocess_env()
+    # PATH may carry casing variants on Windows; accept any case-insensitive hit.
+    path_val = next((v for k, v in env.items() if k.upper() == "PATH"), "")
+    assert path_val, "PATH fehlt oder ist leer im Child-Env"
+    print("  QW3 OK — PATH vorhanden und nicht leer")
+
+
+def test_safe_env_sets_pythonutf8() -> None:
+    """QW2 coupling: the child env pins PYTHONUTF8=1."""
+    import bridge_common as bc
+    env = bc.safe_subprocess_env()
+    assert env.get("PYTHONUTF8") == "1", "PYTHONUTF8 nicht auf '1' gesetzt"
+    print("  QW2 OK — PYTHONUTF8=1 im Child-Env")
+
+
+def test_safe_env_extra_overlay() -> None:
+    """QW3: an extra dict is overlaid last (override wins)."""
+    import bridge_common as bc
+    env = bc.safe_subprocess_env({"FOO": "bar", "PYTHONUTF8": "0"})
+    assert env.get("FOO") == "bar", "extra-Key fehlt im Ergebnis"
+    assert env.get("PYTHONUTF8") == "0", "extra-Overlay überschreibt PYTHONUTF8 nicht"
+    print("  QW3 OK — extra-Dict wird zuletzt drübergelegt (override)")
+
+
+def test_ensure_utf8_runtime_idempotent() -> None:
+    """QW2: ensure_utf8_runtime is safe to call repeatedly; never raises."""
+    import bridge_common as bc
+    bc.ensure_utf8_runtime()
+    bc.ensure_utf8_runtime()
+    print("  QW2 OK — ensure_utf8_runtime idempotent, wirft nicht")
+
+
+def test_subprocess_run_quiet_uses_oem_encoding() -> None:
+    """QW2 (User-Ergänzung): the CMD-internal tool reader (tasklist) decodes the
+    OEM code page via encoding='oem', not utf-8+errors='replace'."""
+    import inspect
+    import bridge_common as bc
+    src = inspect.getsource(bc._subprocess_run_quiet)
+    # Inspect only the code, not the docstring (which legitimately *mentions*
+    # the old errors='replace' approach to explain the change).
+    code = src.split('"""', 2)[-1] if src.count('"""') >= 2 else src
+    assert 'encoding="oem"' in code or "encoding='oem'" in code, \
+        "_subprocess_run_quiet nutzt kein encoding='oem'"
+    assert "errors=" not in code, \
+        "errors='replace' sollte durch encoding='oem' ersetzt sein"
+    print("  QW2 OK — tasklist-Lesestelle nutzt encoding='oem'")
+
+
 def main() -> int:
     _fresh_bridge()
-    print("=== Härtungs-Regressionstests (F1/F2/F3/F4) ===")
+    print("=== Härtungs-Regressionstests (F1/F2/F3/F4 + QW2/QW3) ===")
     tests = [
         test_f2_unique_ids,
         test_f2_exclusive_write,
@@ -304,6 +460,17 @@ def main() -> int:
         test_poll_skips_task_with_bad_id,
         test_recovery_validates_task_id,
         test_f1_double_claim_one_result,
+        test_safe_env_drops_api_keys,
+        test_safe_env_drops_secret_despite_allowed_prefix,
+        test_safe_env_drops_oauth_bearer_pat_variants,
+        test_safe_env_ssh_auth_sock_survives_secret_denylist,
+        test_safe_env_keeps_git_transport_vars,
+        test_safe_env_keeps_appdata_localappdata,
+        test_safe_env_keeps_path,
+        test_safe_env_sets_pythonutf8,
+        test_safe_env_extra_overlay,
+        test_ensure_utf8_runtime_idempotent,
+        test_subprocess_run_quiet_uses_oem_encoding,
     ]
     failed = 0
     for t in tests:

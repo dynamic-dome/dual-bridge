@@ -34,7 +34,42 @@ def parse_codex_output(raw: str) -> str:
     text = raw.lstrip("﻿").strip()
     if not text:
         return ""
-    # Try JSON first (event-stream or single object); ignore trailing junk.
+    # NDJSON path (codex exec --json emits one JSON event per line). Parse each
+    # non-empty line with raw_decode (BOM-tolerant) and collect what decodes.
+    # ONLY treat the stream as NDJSON when >1 event actually decodes -- a single,
+    # possibly pretty-printed JSON object that merely contains "\n" must NOT be
+    # misread as NDJSON, so it falls through to the single raw_decode path below.
+    if text[0] in "{[" and "\n" in text:
+        events = []
+        ndjson = True
+        for line in text.splitlines():
+            line = line.lstrip("﻿").strip()
+            if not line:
+                continue
+            if line[0] not in "{[":
+                continue  # trailing hook noise -> not an event, ignore
+            try:
+                value, end = json.JSONDecoder().raw_decode(line)
+            except ValueError:
+                continue  # undecodable line -> skip, do not abort the stream
+            # A genuine NDJSON line is a COMPLETE JSON value: raw_decode must
+            # consume essentially the whole line. If a line is only the partial
+            # start of a value (e.g. "[" or "{" of a pretty-printed array/object
+            # spanning lines), this is NOT NDJSON -> fall through to single path.
+            if end < len(line.rstrip().rstrip(",")):
+                ndjson = False
+                break
+            events.append(value)
+        if ndjson and len(events) > 1:
+            # Q3b: pick the last event that carries a REAL answer key. A trailing
+            # metadata event (turn.completed/usage) has no answer -> must not be
+            # stringified and returned as if it were the answer.
+            for value in reversed(events):
+                ans = _strict_answer_from_event(value)
+                if ans:
+                    return ans
+            return ""
+    # Single JSON value (event-stream array or single object); ignore trailing junk.
     if text[0] in "{[":
         try:
             value, _ = json.JSONDecoder().raw_decode(text)
@@ -43,6 +78,58 @@ def parse_codex_output(raw: str) -> str:
         if value is not None:
             return _answer_from_json(value).strip()
     return text
+
+
+# Known NON-answer NDJSON event 'type' values (status / lifecycle / usage /
+# error). We use a DENYLIST, not an allowlist (Codex-Verifier Q3b round 3): a
+# closed answer-type allowlist would silently DROP a real answer carried by an
+# event type we did not foresee (e.g. message.output_text.delta). Denylisting
+# the known metadata types instead means an UNKNOWN type is still mined for an
+# answer key -- fail toward preserving the answer, not losing it. Substring
+# match catches the whole families (turn.*, thread.*, *.failed, error.*).
+_NON_ANSWER_TYPE_SUBSTR = (
+    "thread.started", "thread.", "turn.started", "turn.completed", "turn.failed",
+    "turn.", "usage", "error", ".failed", ".aborted", ".cancelled", "rate_limit",
+    "tool_call", "reasoning",
+)
+
+
+def _is_non_answer_type(etype: str) -> bool:
+    low = etype.lower()
+    return any(s in low for s in _NON_ANSWER_TYPE_SUBSTR)
+
+
+def _strict_answer_from_event(value: object) -> str:
+    """Answer text from ONE NDJSON event, or "" if it carries none.
+
+    Unlike _answer_from_json this never falls back to json.dumps(value): a
+    metadata-only event (turn.completed/usage/thread.started) must yield "" so
+    the NDJSON selector skips it instead of mistaking its serialisation for the
+    answer (Codex-Verifier Q3b).
+
+    A declared metadata 'type' (denylisted family above) yields "" so a trailing
+    status/error event cannot shadow the real answer. ANY other type -- known or
+    not -- is mined for an answer key, so an unforeseen answer-bearing type is
+    never silently dropped."""
+    if not isinstance(value, dict):
+        return ""
+    etype = value.get("type")
+    if isinstance(etype, str) and _is_non_answer_type(etype):
+        return ""  # declared metadata/status/error event -> skip
+    for key in ("answer", "result", "message", "text", "content", "output"):
+        v = value.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    for key in ("item", "agent_message"):
+        sub = value.get(key)
+        if isinstance(sub, dict):
+            for k in ("text", "result", "message", "content"):
+                v = sub.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        elif isinstance(sub, str) and sub.strip():
+            return sub.strip()
+    return ""
 
 
 def _answer_from_json(value: object) -> str:
@@ -54,6 +141,18 @@ def _answer_from_json(value: object) -> str:
             v = value.get(key)
             if isinstance(v, str) and v.strip():
                 return v
+        # NDJSON event shapes: codex item.completed wraps the answer in an
+        # "item" sub-dict; an agent_message event carries it directly. Look one
+        # level deeper before stringifying so the real answer is not lost.
+        for key in ("item", "agent_message"):
+            sub = value.get(key)
+            if isinstance(sub, dict):
+                for k in ("text", "result", "message", "content"):
+                    v = sub.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v
+            elif isinstance(sub, str) and sub.strip():
+                return sub
         return json.dumps(value, ensure_ascii=False)
     if isinstance(value, list):
         for item in reversed(value):
@@ -71,6 +170,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from bridge_common import safe_subprocess_env
 from runners import RunnerResult, register_runner
 
 CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
@@ -84,7 +184,7 @@ def _run_git(workdir: Path | None, *args: str) -> subprocess.CompletedProcess:
     cmd += list(args)
     return subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8",
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, env=safe_subprocess_env(),
     )
 
 
@@ -250,6 +350,7 @@ def run_codex_task(
         proc = subprocess.run(
             cmd, cwd=str(workdir), capture_output=True, text=True,
             encoding="utf-8", input=auftrag, timeout=timeout,
+            env=safe_subprocess_env(),
         )
     except subprocess.TimeoutExpired as exc:
         _safe_unlink(answer_file)

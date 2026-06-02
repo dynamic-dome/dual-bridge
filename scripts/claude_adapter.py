@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 
+from bridge_common import safe_subprocess_env
 from runners import RunnerResult, register_runner
 
 try:  # pragma: no cover - environment dependent
@@ -70,23 +71,23 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
         return RunnerResult(status="error",
                             error_text="claude nicht gefunden — installiert/im PATH?")
     cwd = str(workroot) if workroot is not None else None
-    env = dict(os.environ)
+    # Allowlist-only env (QW3): closes cross-key leaks systematically. The
     # DCO brain.py leak pattern (verified live on B 2026-05-31): an inherited,
     # INVALID ANTHROPIC_API_KEY in the env takes precedence over the Claude
     # subscription login and makes `claude -p` answer "Invalid API key" (exit 1).
-    # The reviewer must run on the SUBSCRIPTION, so drop any inherited key (and
-    # the alternate auth-token var) from the subprocess env. Removing it forces
-    # claude to use the local subscription login. Verified: key set -> Invalid;
-    # key removed -> clean answer.
-    env.pop("ANTHROPIC_API_KEY", None)
-    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    # The reviewer must run on the SUBSCRIPTION, so no ANTHROPIC_API_KEY/
+    # AUTH_TOKEN may reach the subprocess — the allowlist drops them by NOT
+    # including them (plus belt+braces pop inside safe_subprocess_env). Removing
+    # them forces claude to use the local subscription login. Verified: key set
+    # -> Invalid; key removed -> clean answer.
+    #
     # CLAUDE_CODE_DISABLE_HOOKS=1 is DEPRECATED and no longer suppresses
     # prompt-based Stop/SessionEnd hooks in headless `-p` mode (verified live
     # 2026-05-31: the bridge reviewer crashed with exit 1 "Prompt stop hooks are
     # not yet supported outside REPL" because of a global wrap-up Stop hook).
     # Kept for older CLIs that still honour it, but the real fix is the
     # --settings override below.
-    env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
+    env = safe_subprocess_env({"CLAUDE_CODE_DISABLE_HOOKS": "1"})
     # Authoritative hook-disable for current Claude Code (v2.1+): an inline
     # settings override turns off ALL hooks for this headless run, so a
     # user-configured Stop/SessionEnd hook can never break the reviewer.

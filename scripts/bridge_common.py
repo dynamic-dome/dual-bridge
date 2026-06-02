@@ -20,11 +20,92 @@ from pathlib import Path
 
 # --- Windows UTF-8 hardening (global CLAUDE.md MCP/Windows convention) -------
 # Keep umlauts intact in stdout regardless of the host code page.
-try:  # pragma: no cover - environment dependent
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
-except Exception:
-    pass
+def ensure_utf8_runtime() -> None:
+    """Reconfigure this process' stdout/stderr to UTF-8 (idempotent, never raises).
+
+    Centralizes the scattered ``sys.stdout.reconfigure(encoding="utf-8")``
+    try/except blocks. Safe to call repeatedly: reconfigure is a no-op once the
+    stream already speaks UTF-8, and any environment without a reconfigure()
+    (redirected/pipe stream) is swallowed silently.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:  # pragma: no cover - environment dependent
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
+ensure_utf8_runtime()
+
+
+# --- Child-process environment hardening (QW2 + QW3) -------------------------
+# Allowlist-only env for spawned children. Closes cross-key leaks
+# (OpenAI<->Anthropic) systematically instead of denylisting one key at a time,
+# and pins PYTHONUTF8=1 so codex/claude/git run UTF-8 regardless of the host
+# code page.
+#
+# APPDATA + LOCALAPPDATA are MANDATORY (user requirement): Claude/Codex/Node CLIs
+# look there for their auth/config data. Without them the subprocess is cleanly
+# built but runs UNAUTHENTICATED (P006/P007: mechanics != contract fidelity — the
+# exact trap a pure build test would not reveal).
+_ALLOW_EXACT = {
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "HOME", "HOMEDRIVE",
+    "HOMEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PATHEXT",
+    # Q4 (Codex-Verifier): git over SSH-agent / HTTPS-proxy / corporate cert
+    # would silently break without these. Harmless when unset on this machine.
+    # http_proxy/https_proxy (lowercase, Unix-style) normalise to the same upper
+    # name via k.upper(), so they are covered by these entries.
+    "SSH_AUTH_SOCK", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+}
+# Case-insensitive prefix match. PATH covers PATH/PATHEXT-casing variants;
+# PYTHON covers PYTHONUTF8/PYTHONPATH/...; GIT_/LANG/LC_ keep git + locale sane.
+_ALLOW_PREFIX = ("PATH", "PYTHON", "GIT_", "LANG", "LC_")
+# Q1 (Codex-Verifier): the broad prefixes (GIT_, PATH, PYTHON) could let a
+# secret through (e.g. GIT_TOKEN, PATH_SECRET). A final denylist substring pass
+# drops anything that smells like a credential, regardless of how it matched.
+_SECRET_SUBSTR = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL",
+                  "APIKEY", "API_KEY", "PRIVATE_KEY", "ACCESS_KEY",
+                  # Q1 round 2 (Codex-Verifier): bare KEY + OAuth/bearer/PAT so
+                  # GIT_BEARER, GIT_OAUTH, PYTHON_KEY, *_PAT cannot slip through.
+                  # NB: use "AUTH_" / "AUTHORIZATION" (not bare "AUTH") so the
+                  # legitimate SSH_AUTH_SOCK transport var is NOT killed.
+                  "BEARER", "OAUTH", "_KEY", "AUTH_", "AUTHORIZATION", "_PAT",
+                  # Q1 round 3 (Codex-Verifier): GIT_HTTP_EXTRAHEADER can carry an
+                  # "Authorization: Bearer ..." credential with none of the above
+                  # substrings -> block any *_HEADER / EXTRAHEADER var too.
+                  "EXTRAHEADER", "HEADER")
+# Allowlisted transport vars that must survive the secret denylist even though
+# their name brushes a secret substring (SSH_AUTH_SOCK contains 'AUTH').
+_SECRET_EXCEPT = frozenset({"SSH_AUTH_SOCK"})
+
+
+def safe_subprocess_env(extra: dict | None = None) -> dict:
+    """Build an allowlist-only environment dict for a child process.
+
+    Keeps only the explicitly allowlisted vars (exact names + prefixes), drops
+    anything that looks like a secret even if it matched a broad prefix (Q1),
+    forces PYTHONUTF8=1, and as belt-and-braces pops any Anthropic key/token.
+    ``extra`` is overlaid last (override).
+    """
+    base = {
+        k: v for k, v in os.environ.items()
+        if k.upper() in _ALLOW_EXACT or k.upper().startswith(_ALLOW_PREFIX)
+    }
+    # Q1: secret-substring denylist beats the broad allowlist prefixes.
+    for k in list(base):
+        if k.upper() in _SECRET_EXCEPT:
+            continue  # explicit transport var (e.g. SSH_AUTH_SOCK) — keep it
+        if any(s in k.upper() for s in _SECRET_SUBSTR):
+            del base[k]
+    base["PYTHONUTF8"] = "1"
+    # belt+braces: the Anthropic vars must never reach a subscription-login child.
+    base.pop("ANTHROPIC_API_KEY", None)
+    base.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if extra:
+        base.update(extra)
+    return base
 
 
 # --- Bridge root resolution --------------------------------------------------
@@ -373,17 +454,23 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _subprocess_run_quiet(cmd: list[str]) -> str:
-    """Run a command and return stdout. Decodes with errors='replace' because
-    Windows `tasklist` emits the OEM code page (e.g. cp850/cp1252 on a German
-    locale), which is not valid UTF-8 -- a hard utf-8 decode would raise in the
-    reader thread. We only need the ASCII pid digits, so replacement is safe."""
+    """Run a CMD-internal tool (e.g. `tasklist`) and return stdout.
+
+    Decodes with encoding='oem' (User-Ergänzung, Roadmap-Dossier 4): Windows
+    `tasklist` emits the OEM code page (e.g. cp850 on a German locale), which is
+    NOT valid UTF-8. `oem` is the lossless OEM code page (CPython #105312) and
+    decodes the full output faithfully, where a utf-8+errors='replace' decode
+    would only be safe for the bare pid digits and corrupt everything else."""
     import subprocess
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace",
+                            encoding="oem",
                             stdin=subprocess.DEVNULL)
         return cp.stdout or ""
-    except (OSError, ValueError):
+    except (OSError, ValueError, LookupError):
+        # LookupError: the 'oem' codec is Windows-only; on a non-Windows host
+        # (where this path is never reached anyway) the lookup would fail. Stay
+        # graceful rather than raise. (Codex-Verifier Q5.)
         return ""
 
 
