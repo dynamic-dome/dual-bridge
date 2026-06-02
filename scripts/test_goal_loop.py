@@ -43,3 +43,34 @@ def test_parse_verdict_unknown_token_fail_closed():
     from handoff_poll import parse_verdict
     # An unrecognised token must NOT become escalate — fail-closed to rejected.
     assert parse_verdict("x\nVERDICT: maybe")[0] == "rejected"
+
+
+# --- Task 2: parse_seed ---
+
+def test_parse_seed_splits_goal_and_criteria(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    seed = (
+        "## Ziel\n"
+        "Add a greeting utility.\n\n"
+        "## Done-Kriterien\n"
+        "- [ ] function greet(name) returns 'Hello, <name>!'\n"
+        "- [ ] has a docstring\n"
+    )
+    goal, criteria = ld.parse_seed(seed)
+    assert goal == "Add a greeting utility."
+    assert criteria == [
+        "function greet(name) returns 'Hello, <name>!'",
+        "has a docstring",
+    ]
+
+
+def test_parse_seed_missing_criteria_raises(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    with __import__("pytest").raises(ValueError):
+        ld.parse_seed("## Ziel\nonly a goal, no criteria block\n")
+
+
+def test_parse_seed_empty_criteria_raises(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    with __import__("pytest").raises(ValueError):
+        ld.parse_seed("## Ziel\nG\n\n## Done-Kriterien\n")

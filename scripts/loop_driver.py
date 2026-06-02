@@ -22,6 +22,52 @@ import claude_adapter  # noqa: F401
 STATE_DIR = Path(__file__).resolve().parent / "state"
 
 
+def parse_seed(seed_text: str) -> tuple[str, list[str]]:
+    """Split a structured goal-loop seed into (goal, done_criteria).
+
+    Format (Markdown):
+        ## Ziel
+        <prose goal>
+
+        ## Done-Kriterien
+        - [ ] criterion 1
+        - [ ] criterion 2
+
+    The goal is the prose under `## Ziel`. Criteria are the checklist items
+    under `## Done-Kriterien` (the `- [ ]`/`- [x]` prefix is stripped).
+    Raises ValueError if either block is missing or the criteria list is empty.
+    """
+    goal_lines: list[str] = []
+    criteria: list[str] = []
+    section = None
+    for raw in seed_text.splitlines():
+        line = raw.rstrip()
+        low = line.strip().lower()
+        if low.startswith("## ziel"):
+            section = "goal"
+            continue
+        if low.startswith("## done-kriterien"):
+            section = "criteria"
+            continue
+        if section == "goal" and line.strip():
+            goal_lines.append(line.strip())
+        elif section == "criteria":
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                item = stripped[2:].strip()
+                # strip a leading checkbox: [ ] / [x] / [X]
+                if item[:3] in ("[ ]", "[x]", "[X]"):
+                    item = item[3:].strip()
+                if item:
+                    criteria.append(item)
+    goal = " ".join(goal_lines).strip()
+    if not goal:
+        raise ValueError("seed has no '## Ziel' block")
+    if not criteria:
+        raise ValueError("seed has no done-criteria under '## Done-Kriterien'")
+    return goal, criteria
+
+
 def append_state(loop_id: str, record: dict) -> None:
     """Append one round record to scripts/state/LOOP-<loop_id>.jsonl (history,
     A-side only). Adds an ISO timestamp. Append-only, never deletes."""
