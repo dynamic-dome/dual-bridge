@@ -284,3 +284,32 @@ def test_goal_loop_max_rounds(monkeypatch, tmp_path):
         build_runner=_fake_build_factory(["c1", "c2"]), b_tick=b_distinct)
     assert summary["escalated"] is True
     assert summary["escalation_trigger"] == "max_rounds"
+
+
+# --- Task 9: dangerous-action ---
+
+def test_goal_loop_dangerous_diff_escalates(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    from runners import RunnerResult
+
+    def dangerous_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="built", branch=fm["branch"],
+                            commit="c1", changed_files=["x.sql"],
+                            diff="+DROP TABLE users;")
+
+    # b_tick should never fire — escalation happens before review.
+    fired = {"n": 0}
+
+    def b_should_not_run(task_id):
+        fired["n"] += 1
+
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=dangerous_build, b_tick=b_should_not_run)
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "dangerous_action"
+    assert fired["n"] == 0
+    meta = ld.read_escalation(summary["loop_id"])
+    assert meta["trigger"] == "dangerous_action"

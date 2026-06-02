@@ -282,6 +282,12 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
                 "abort_reason": f"A-build error: {a_res.error_text}",
                 "verdict": None, "verdict_reason": None, "commit": None,
                 "diff": "", "task_id": ""}
+    danger = scan_dangerous((a_res.diff or "") + "\n" + auftrag)
+    if danger is not None:
+        return {"status": "dangerous", "abort_reason": f"dangerous: {danger}",
+                "verdict": None, "verdict_reason": None,
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": "",
+                "danger": danger}
     task_id = write_goal_review_task(loop_id, round_no, goal, done_criteria,
                                      loop_branch, a_res.commit or "",
                                      diff=a_res.diff or "")
@@ -474,8 +480,18 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                                "verdict_reason": out.get("verdict_reason"),
                                "commit": out.get("commit"),
                                "status": out["status"]})
+        if out["status"] == "dangerous":
+            escalated = True
+            escalation_trigger = "dangerous_action"
+            _escalate(loop_id, "dangerous_action", round_no, loop_branch,
+                      out.get("commit") or final_commit, goal, done_criteria,
+                      prev_commit,
+                      reason=f"Gefaehrliches Muster im Diff/Auftrag erkannt: "
+                             f"{out.get('danger')!r} (deny-first, lokal).",
+                      question="Ist diese Aktion gewollt? Falls ja: bewusst "
+                               "manuell ausfuehren. Sonst Seed schaerfen + --resume.")
+            break
         if out["status"] != "done":
-            # transport/build failure — treat as stagnation-style escalation
             escalated = True
             escalation_trigger = "stagnation"
             _escalate(loop_id, "stagnation", round_no, loop_branch,
