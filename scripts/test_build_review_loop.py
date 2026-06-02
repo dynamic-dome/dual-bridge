@@ -44,3 +44,95 @@ def test_build_review_round_accepted(monkeypatch, tmp_path):
     assert out["status"] == "done"
     assert out["verdict"] == "accepted"
     assert out["commit"] == "c1"
+
+
+def test_loop_accepted_round_one(monkeypatch, tmp_path):
+    """accepted in round 0 → loop ends, success, final_commit set."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    def fake_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit="c1", changed_files=["a.py"])
+
+    def b_accept(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "accepted", "verdict_reason": "ok"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "VERDICT: accepted\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=5,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_accept)
+    assert summary["accepted"] is True
+    assert summary["aborted"] is False
+    assert summary["rounds_done"] == 1
+    assert summary["final_commit"] == "c1"
+
+
+def test_loop_rejected_then_accepted(monkeypatch, tmp_path):
+    """round 0 rejected → A rebuilds with the gaps as the new auftrag →
+    round 1 accepted. The rejected reason must reach round 1's build."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    seen_auftrags = []
+    commits = iter(["c1", "c2"])
+
+    def fake_build(auftrag, fm, workroot):
+        seen_auftrags.append(auftrag)
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit=next(commits), changed_files=["a.py"])
+
+    verdicts = iter([("rejected", "missing tests"), ("accepted", "ok now")])
+
+    def b_tick(task_id):
+        verdict, reason = next(verdicts)
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": verdict, "verdict_reason": reason}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, f"VERDICT: {verdict}\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=5,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_tick)
+    assert summary["accepted"] is True
+    assert summary["rounds_done"] == 2
+    # Round 1's auftrag must carry the round-0 rejection reason.
+    assert "missing tests" in seen_auftrags[1]
+
+
+def test_loop_max_rounds_without_accept(monkeypatch, tmp_path):
+    """Always rejected, distinct reasons → stops at max_rounds, not accepted."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    from runners import RunnerResult
+
+    n = iter(range(100))
+    def fake_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="b", branch=fm["branch"],
+                            commit=f"c{next(n)}", changed_files=["a.py"])
+
+    r = iter(range(100))
+    def b_reject(task_id):
+        lane = bc.send_lane()
+        reason = f"still wrong {next(r)}"  # distinct each round → no stagnation
+        fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "rejected", "verdict_reason": reason}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "VERDICT: rejected\n"))
+
+    bc.ensure_dirs()
+    summary = ld.run_build_review_loop(
+        auftrag="build", repo="r", base_branch="main", max_rounds=2,
+        round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_reject)
+    assert summary["accepted"] is False
+    assert summary["aborted"] is True
+    assert summary["rounds_done"] == 2
+    assert "max-rounds" in summary["abort_reason"]

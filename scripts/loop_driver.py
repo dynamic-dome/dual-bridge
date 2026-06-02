@@ -137,6 +137,59 @@ def _next_loop_id() -> str:
     return f"loop-{bc.make_task_id()}"
 
 
+def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
+                          round_timeout, interval=5, build_runner=None,
+                          b_tick=None):
+    """Asymmetric build↔review loop. A builds (codex) on a stable loop branch,
+    B reviews (claude, kind:review → verdict). accepted ends; rejected feeds the
+    reviewer's gaps into the next build. Bounded by max_rounds; stagnation guard
+    added in the next task. `build_runner` defaults to the registered codex
+    runner; tests inject a fake. Returns a summary dict."""
+    if build_runner is None:
+        build_runner = runners.RUNNERS["codex"]
+    loop_id = _next_loop_id()
+    current_auftrag = auftrag
+    rounds_done = 0
+    accepted = False
+    aborted = False
+    abort_reason = ""
+    final_commit = ""
+    open_task_id = ""
+
+    for round_no in range(max_rounds):
+        out = _build_review_round(
+            loop_id=loop_id, round_no=round_no, auftrag=current_auftrag,
+            repo=repo, base_branch=base_branch, build_runner=build_runner,
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+        append_state(loop_id, {"round": round_no, "side": "build-review",
+                               "verdict": out.get("verdict"),
+                               "verdict_reason": out.get("verdict_reason"),
+                               "commit": out.get("commit"),
+                               "task_id": out.get("task_id"),
+                               "status": out["status"]})
+        if out["status"] != "done":
+            aborted, abort_reason = True, out["abort_reason"]
+            open_task_id = out.get("task_id", "")
+            break
+        rounds_done += 1
+        final_commit = out.get("commit") or final_commit
+        if out["verdict"] == "accepted":
+            accepted = True
+            break
+        # rejected → feed the gaps into the next build
+        current_auftrag = (f"{auftrag}\n\nDer Reviewer hat abgelehnt. Behebe:\n"
+                           f"{out.get('verdict_reason') or '(keine Begruendung)'}")
+    else:
+        aborted, abort_reason = True, "max-rounds erreicht, nicht akzeptiert"
+
+    return {
+        "loop_id": loop_id, "rounds_done": rounds_done, "accepted": accepted,
+        "final_commit": final_commit, "aborted": aborted,
+        "abort_reason": abort_reason, "open_task_id": open_task_id,
+        "final_branch": f"bridge/loop-{loop_id}",
+    }
+
+
 def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
              interval: float = 5, b_tick=None) -> dict:
     """Drive the ping-pong loop. Each round: A works inline on the current
