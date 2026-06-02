@@ -33,17 +33,19 @@ def _make_origin(tmp_path) -> str:
 
 
 def _fake_codex_appends(monkeypatch, line_holder):
-    """Patch codex's subprocess so 'codex' appends a line to f.txt in the
-    workdir (a real file change → real commit), and writes an answer. Real git
-    calls (cmd[0] == 'git') are delegated to the real subprocess.run so the
-    clone/fetch/reset/commit machinery stays genuine — only the 'codex exec'
-    invocation is faked."""
-    real_run = subprocess.run
+    """Patch codex's subprocess so the codex binary call appends a line to
+    f.txt in the workdir (a real file change → real commit) and writes an
+    answer file.  Every other command (git clone/fetch/reset/commit/…) is
+    delegated to the real subprocess.run so the git machinery stays genuine.
+    Discrimination is on the binary name (cmd[0] ends with 'codex' or
+    'codex.exe'), NOT on a positional token like cmd[1]=='exec', which would
+    silently pass through a renamed or path-extended binary."""
+    real_run = ca.subprocess.run  # captured BEFORE monkeypatch replaces it
 
     def fake_run(cmd, **kw):
-        # Delegate everything that is NOT the codex exec to the real git binary.
-        if not (isinstance(cmd, (list, tuple)) and len(cmd) >= 2
-                and str(cmd[1]) == "exec"):
+        # Only intercept the codex binary; let every real git command run.
+        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
+        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
             return real_run(cmd, **kw)
         cwd = kw.get("cwd")
         workdir = Path(cwd)

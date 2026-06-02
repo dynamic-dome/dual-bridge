@@ -17,6 +17,9 @@ scripts/.agent-memory/
 dual-bridge-work/
 *.codex-answer-*.txt
 
+# loop history + working clones (per-machine, never committed)
+scripts/state/
+
 # Local poller lock
 *.lock
 

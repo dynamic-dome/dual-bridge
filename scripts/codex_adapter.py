@@ -165,7 +165,12 @@ def run_codex_task(
 ) -> CodexResult:
     """Run one task end-to-end on Laptop B. Every path returns a CodexResult
     with status done|error -- never raises to the caller (spec section 5: no
-    stuck, no silent failure)."""
+    stuck, no silent failure).
+
+    workdir_name overrides the per-task working-dir name (default: task_id). The
+    build-review loop passes a stable loop_id so all rounds share one workdir and
+    round 2+ continues from the loop branch instead of re-cloning base.
+    """
     allow = os.environ.get("DUAL_BRIDGE_REPO_ALLOWLIST", "").strip()
     if allow:
         import fnmatch
