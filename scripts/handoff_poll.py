@@ -39,9 +39,9 @@ def _is_conflict_copy(name: str) -> bool:
 def parse_verdict(text: str) -> tuple[str, str]:
     """Extract a review verdict from a reviewer's answer (Stage-2b core).
 
-    Convention: the reviewer ends with a line `VERDICT: accepted` or
-    `VERDICT: rejected` (case-insensitive; the LAST such line wins). Returns
-    (verdict, reason).
+    Convention: the reviewer ends with a line `VERDICT: accepted`,
+    `VERDICT: escalate`, or `VERDICT: rejected` (case-insensitive; the LAST
+    such line wins). Returns (verdict, reason).
 
     FAIL-CLOSED (PFLICHT): no marker, empty text, or any unrecognised verdict
     token resolves to ("rejected", <reason>). A review NEVER auto-accepts on
@@ -59,6 +59,8 @@ def parse_verdict(text: str) -> tuple[str, str]:
         return ("rejected", "no VERDICT marker found")
     if found == "accepted":
         return ("accepted", "")
+    if found == "escalate":
+        return ("escalate", "")
     if found == "rejected":
         return ("rejected", "")
     return ("rejected", f"unrecognised verdict token: {found!r}")
