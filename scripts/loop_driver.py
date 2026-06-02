@@ -501,12 +501,42 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                                "Entscheidung (s. Grund). Seed schaerfen + "
                                "--resume.")
             break
-        # rejected → iterate (stagnation guards added in Task 8)
-        prev_commit = out.get("commit")
+        # rejected → check stagnation, then iterate
+        commit = out.get("commit")
         reason = out.get("verdict_reason")
+        if prev_commit is not None and commit == prev_commit:
+            escalated = True
+            escalation_trigger = "stagnation"
+            _escalate(loop_id, "stagnation", round_no, loop_branch, commit,
+                      goal, done_criteria, prev_commit,
+                      reason="Stagniert: kein neuer Commit gegenueber der "
+                             "Vorrunde.",
+                      question="Der Bau kommt nicht voran. Seed schaerfen "
+                               "(klarere Kriterien) + --resume.")
+            break
+        if prev_reason is not None and reason == prev_reason:
+            escalated = True
+            escalation_trigger = "stagnation"
+            _escalate(loop_id, "stagnation", round_no, loop_branch, commit,
+                      goal, done_criteria, prev_commit,
+                      reason=f"Stagniert: Reviewer wiederholt denselben Grund "
+                             f"({reason!r}).",
+                      question="Derselbe Gap bleibt offen. Seed schaerfen "
+                               "+ --resume.")
+            break
+        prev_commit = commit
         prev_reason = reason
         current_auftrag = (f"{base_auftrag}\n\nDer Reviewer hat abgelehnt. "
                            f"Behebe:\n{reason or '(keine Begruendung)'}")
+    else:
+        # max-rounds without accepted → escalate with a briefing
+        escalated = True
+        escalation_trigger = "max_rounds"
+        _escalate(loop_id, "max_rounds", max_rounds - 1, loop_branch,
+                  final_commit, goal, done_criteria, prev_commit,
+                  reason=f"max-rounds ({max_rounds}) erreicht ohne accepted.",
+                  question="Mehr Runden noetig? --resume (max_rounds darf "
+                           "unveraendert bleiben) oder Seed schaerfen.")
     return _summary()
 
 

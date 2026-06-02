@@ -233,3 +233,54 @@ def test_goal_loop_reviewer_escalate(monkeypatch, tmp_path):
     assert summary["accepted"] is False
     meta = ld.read_escalation(summary["loop_id"])
     assert meta["trigger"] == "reviewer_requested"
+
+
+# --- Task 8: stagnation + max-rounds ---
+
+def test_goal_loop_stagnation_same_commit(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    # Same commit twice + always rejected → stagnation on round 2.
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=5, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c1"]),
+        b_tick=_b_verdict("rejected", reason="nope"))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "stagnation"
+
+
+def test_goal_loop_stagnation_repeated_reason(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    # New commit each round but identical reject reason → stagnation.
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=5, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c2", "c3"]),
+        b_tick=_b_verdict("rejected", reason="same gap"))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "stagnation"
+
+
+def test_goal_loop_max_rounds(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    # Distinct commits + distinct reasons → never stagnates, hits max-rounds.
+    reasons = iter(["r1", "r2"])
+
+    def b_distinct(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": "rejected",
+              "verdict_reason": next(reasons)}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, "## Antwort\nVERDICT: rejected\n"))
+
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=2, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c2"]), b_tick=b_distinct)
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "max_rounds"
