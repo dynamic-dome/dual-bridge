@@ -1239,6 +1239,177 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
+## Task 10: Embed the build diff in the review prompt (live-proof fix)
+
+**Files:**
+- Modify: `scripts/codex_adapter.py` (`RunnerResult` has no diff; `run_codex_task` step 7 ~273 — capture diff after commit; `CodexResult` is the alias)
+- Modify: `scripts/runners.py` (`RunnerResult` dataclass — add `diff` field)
+- Modify: `scripts/loop_driver.py` (`write_review_task` — accept + embed diff; `_build_review_round` — pass `a_res.diff`)
+- Test: `scripts/test_build_review_loop.py` (append), `scripts/test_codex_branch_override.py` (append a diff-capture unit test)
+
+**Why:** The first live run proved codex builds + pushes correctly, but the claude reviewer runs headless with `--tools ""` (P009 hardening) — it has NO git/Bash/Read, so it cannot `git checkout` the loop branch. It honestly answered "no repo, cannot review" → no VERDICT marker → fail-closed rejected → stagnation abort after 2 rounds. Fix: A captures `git diff <base>..HEAD` after the build and embeds it in the review prompt; the tool-less reviewer judges the diff text (what it CAN do headless). Truncate over-long diffs with an honest marker (no silent cap).
+
+- [ ] **Step 1: Add a `diff` field to RunnerResult**
+
+In `scripts/runners.py`, add to the `RunnerResult` dataclass (after `note`):
+```python
+    diff: str | None = None            # unified diff of the build (review payload)
+```
+
+- [ ] **Step 2: Write the failing diff-capture test**
+
+Append to `scripts/test_codex_branch_override.py`:
+```python
+def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
+    """run_codex_task returns the build diff (git diff base..HEAD) on success."""
+    monkeypatch.setattr(ca, "_git_clone_or_pull",
+                        lambda r, b, w, **k: (w / ".git").mkdir(parents=True, exist_ok=True) or w)
+    monkeypatch.setattr(ca, "_git_checkout_branch", lambda w, branch: None)
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
+    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: ["scripts/runners.py"])
+    monkeypatch.setattr(ca, "_git_commit_and_push", lambda w, b, m: "abc123")
+    # the new diff helper returns a canned unified diff
+    monkeypatch.setattr(ca, "_git_diff", lambda w, base: "--- a\n+++ b\n+new line\n")
+
+    res = ca.run_codex_task(auftrag="x", repo="r", base_branch="main",
+                            task_id="t-d", workroot=tmp_path, branch="bridge/loop-d")
+    assert res.status == "done"
+    assert res.diff == "--- a\n+++ b\n+new line\n"
+```
+
+- [ ] **Step 3: Run to verify it fails**
+
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest test_codex_branch_override.py -k captures_diff -v`
+Expected: FAIL — `module 'codex_adapter' has no attribute '_git_diff'` (or `res.diff` is None).
+
+- [ ] **Step 4: Add `_git_diff` and capture it in run_codex_task**
+
+In `scripts/codex_adapter.py`, add a helper near the other git helpers (after `_git_commit_and_push`):
+```python
+_DIFF_LIMIT = 60_000  # chars; over this we truncate the review payload honestly
+
+
+def _git_diff(workdir: Path, base_branch: str) -> str:
+    """Unified diff of the build vs base (origin/base..HEAD). Truncated to
+    _DIFF_LIMIT with an explicit marker (never a silent cap)."""
+    cp = _run_git(workdir, "diff", f"origin/{base_branch}...HEAD")
+    text = cp.stdout or ""
+    if len(text) > _DIFF_LIMIT:
+        text = (text[:_DIFF_LIMIT]
+                + f"\n\n[... Diff bei {_DIFF_LIMIT} Zeichen abgeschnitten "
+                  f"(Gesamtlänge {len(cp.stdout)}); Reviewer urteilt auf dem "
+                  "gezeigten Ausschnitt ...]\n")
+    return text
+```
+Then in `run_codex_task` step 7, after the successful `commit = _git_commit_and_push(...)` line and before the final `return CodexResult(status="done", ...)`, capture the diff and add it to the returned result:
+```python
+    diff = _git_diff(workdir, base_branch)
+    return CodexResult(status="done", antwort=antwort, branch=branch,
+                       commit=commit, changed_files=changed, diff=diff)
+```
+(The existing success return at the end of step 7 is replaced by this one. The `origin/<base>...HEAD` three-dot form diffs from the merge-base, which is what a reviewer wants. `origin/<base>` exists because the clone/pull fetched it.)
+
+- [ ] **Step 5: Run to verify it passes**
+
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest test_codex_branch_override.py -v`
+Expected: PASS (all, incl. the new diff-capture test).
+
+- [ ] **Step 6: Embed the diff in the review prompt (write_review_task + _build_review_round)**
+
+In `scripts/loop_driver.py`, change `write_review_task` to accept a `diff` and embed it instead of the "fetch the branch yourself" instruction. New signature + body:
+```python
+def write_review_task(loop_id: str, round_no: int, auftrag: str,
+                      loop_branch: str, loop_commit: str, diff: str = "") -> str:
+    """Write an open kind:review task to B (claude reviewer). The reviewer runs
+    headless WITHOUT tools, so it cannot check out the branch — we embed the
+    build diff in the prompt and have it judge the diff text."""
+    bc.ensure_dirs()
+    me = bc.this_endpoint()
+    lane = bc.send_lane()
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "schema_version": "2",
+        "agent": me, "from": me, "to": to, "purpose": "handoff",
+        "status": "open", "task_id": task_id, "kind": "review",
+        "adapter": "claude",
+        "loop_id": loop_id, "round": str(round_no),
+        "loop_branch": loop_branch, "loop_commit": loop_commit,
+        "payload": f"{loop_branch}@{loop_commit}",
+        "claimed_by": "", "claimed_at": "",
+    }
+    diff_block = diff.strip() or "(kein Diff — codex meldete keine Datei-Aenderung)"
+    body = (f"## Auftrag\n{auftrag}\n\n"
+            f"Der Bau-Agent (codex) hat auf `{loop_branch}` (Commit `{loop_commit}`) "
+            "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
+            "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
+            f"```diff\n{diff_block}\n```\n\n"
+            "Reviewe die Aenderung gegen den Auftrag. Antworte mit GENAU einer "
+            "Zeile `VERDICT: accepted` oder `VERDICT: rejected` plus kurzer "
+            "Begruendung.\n\n## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+```
+And in `_build_review_round`, pass the diff through (the build result now carries it):
+```python
+    task_id = write_review_task(loop_id, round_no, auftrag,
+                                loop_branch, a_res.commit or "",
+                                diff=a_res.diff or "")
+```
+
+- [ ] **Step 7: Update/extend the loop tests for the diff**
+
+The existing build-review tests inject `fake_build` returning `RunnerResult(...)` without `diff` — they still pass (diff defaults to None → empty block). Append one test asserting the diff reaches the task body. Append to `scripts/test_build_review_loop.py`:
+```python
+def test_review_task_embeds_diff(monkeypatch, tmp_path):
+    """write_review_task embeds the build diff in the task body (no 'fetch')."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    tid = ld.write_review_task(loop_id="loop-d", round_no=0, auftrag="do x",
+                               loop_branch="bridge/loop-d", loop_commit="c1",
+                               diff="--- a\n+++ b\n+added\n")
+    lane = bc.send_lane()
+    body = bc.read_text_utf8(bc.lane_outbox(lane) / f"task-{tid}.md")
+    assert "+added" in body
+    assert "```diff" in body
+    assert "KEINE Tools" in body
+```
+
+- [ ] **Step 8: Run the full suite**
+
+Run: `cd C:/Users/domes/AI/dual-bridge/scripts && python -m pytest -q`
+Expected: ALL pass (existing build-review tests still green with diff defaulting to None; new diff tests pass; Stage-1 untouched).
+
+- [ ] **Step 9: Commit**
+
+```bash
+cd C:/Users/domes/AI/dual-bridge
+git add scripts/runners.py scripts/codex_adapter.py scripts/loop_driver.py scripts/test_codex_branch_override.py scripts/test_build_review_loop.py
+git commit -m "fix(loop): embed build diff in review prompt (tool-less reviewer)
+
+Live proof showed the headless claude reviewer (--tools '') cannot checkout the
+loop branch, so it could never review. A now captures git diff base..HEAD and
+embeds it in the review prompt; the reviewer judges the diff text. Over-long
+diffs are truncated with an explicit marker (no silent cap).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 10: Live re-proof**
+
+Re-run Task 8's live loop (B still polling). This time the reviewer receives the diff in-prompt and can produce a real VERDICT. Verify Ground-Truth (P007): the reviewer's result text now contains a real `VERDICT:` marker reasoning about the diff content; loop ends `accepted` (or a substantive `rejected` about the actual change, not "no repo"). Read the result file in the lane `_processed/`.
+
+---
+
 ## Self-Review (completed by plan author)
 
 **Spec coverage:**

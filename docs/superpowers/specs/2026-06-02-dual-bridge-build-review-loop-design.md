@@ -67,6 +67,22 @@ Seam prüfen Fakes nicht; P006/P009). Siehe Plan-Task 9.
 auf. Der Overnight-Scheduler, freie Arbeits-Loops mit offenem Ziel und Auto-Merge sind **Stufe 3**
 (eigene Spec).
 
+**Nachtrag 2 (Live-Beweis-Befund 2026-06-02, korrigiert eine Kern-Designannahme):** Der erste
+echte Live-Lauf (codex baute + pushte `bridge/loop-...@006f9b9` korrekt, Ground-Truth verifiziert)
+deckte auf, dass die Annahme »**B holt den Branch selbst** per `git fetch && git checkout` im
+Reviewer-Prompt« **technisch unmöglich** ist: Der claude-Reviewer läuft headless mit `--tools ""
+--permission-mode bypassPermissions` (P009-Härtung gegen Hang/Hook-Crash) — er hat **kein
+git/Bash/Read** und kann keinen Branch auschecken. Er antwortete ehrlich »kein Repo, kann nicht
+reviewen«, setzte korrekt **keinen** `VERDICT:`-Marker → fail-closed `rejected` → Stagnations-Guard
+nach 2 Runden. **Alles andere (Bau, Bridge-Roundtrip, fail-closed, Stagnation) funktionierte live.**
+**Korrektur (Diff-Embed):** A holt den Diff (`git diff <base>..<loop-branch>`) NACH dem Push und
+bettet ihn in den Review-Prompt ein; der tool-lose Reviewer beurteilt den **Diff-Text** (genau das,
+was er headless-sicher kann — wie ein PR-Diff). Bei Überlänge ehrlich truncaten + im Prompt
+markieren (kein silent cap). Das ist faktisch die im Brainstorming verworfene »Inline-Diff«-Variante
+— der Live-Lauf zeigt, dass sie die EINZIGE headless-kompatible ist. Tool-behafteter Reviewer
+(echtes Auschecken) bleibt bewusst Stufe-3/async-Backend-Material (L27: Tool-Inkompatibilität ist
+ein Architektur-Signal). Siehe Plan-Task 10.
+
 ## Architektur
 
 ### Neuer Loop-Modus (kein neues Skript)
