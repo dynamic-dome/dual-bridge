@@ -670,6 +670,22 @@ def wait_for_result(task_id: str, timeout: int, interval: float = 5):
         time.sleep(interval)
 
 
+def validate_resume(loop_id: str, new_seed_text: str | None) -> tuple[bool, str]:
+    """Resume validation. max_rounds escalations may resume unchanged (the goal
+    is fine, the owner just wants more rounds); every other trigger requires a
+    changed/sharpened seed (otherwise the loop runs straight back into the same
+    wall). Returns (ok, message)."""
+    meta = read_escalation(loop_id)
+    if meta is None:
+        return (False, f"no ESCALATION file for loop {loop_id}")
+    trigger = meta.get("trigger", "")
+    if trigger == "max_rounds":
+        return (True, "max_rounds: unchanged resume allowed")
+    if not new_seed_text or not new_seed_text.strip():
+        return (False, f"trigger {trigger!r} requires a sharpened --seed")
+    return (True, f"trigger {trigger!r}: sharpened seed provided")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Self-driving A<->B ping-pong loop (runs on Laptop A).")
@@ -684,12 +700,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval", type=float, default=5.0,
                         help="Poll interval seconds while waiting for a result.")
     parser.add_argument("--mode", default="ping-pong",
-                        choices=["ping-pong", "build-review"],
-                        help="ping-pong (Stage 1) or build-review (Stage 2b).")
+                        choices=["ping-pong", "build-review", "goal-loop"],
+                        help="ping-pong (Stage 1), build-review (Stage 2b), "
+                             "or goal-loop (Stage 3).")
     parser.add_argument("--repo", default="",
                         help="Repo URL/path to build in (build-review mode).")
     parser.add_argument("--base-branch", default="main",
                         help="Base branch to start the loop branch from.")
+    parser.add_argument("--resume", default=None,
+                        help="goal-loop: resume an escalated loop by loop_id "
+                             "(reuses the loop branch).")
     args = parser.parse_args(argv)
 
     # Singleton: one loop driver per machine (reuses the poller lock pattern,
@@ -725,6 +745,45 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    History: {STATE_DIR / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
         print("=" * 60)
         return 0 if summary["accepted"] else 1
+
+    if args.mode == "goal-loop":
+        if not args.repo:
+            print("[A] --mode goal-loop braucht --repo.")
+            return 2
+        if args.resume:
+            ok, msg = validate_resume(args.resume, args.seed)
+            if not ok:
+                print(f"[A] resume abgelehnt: {msg}")
+                return 2
+            loop_id = args.resume
+            old = _escalation_path(loop_id)
+            if old.exists():
+                proc = STATE_DIR / "_processed"
+                proc.mkdir(parents=True, exist_ok=True)
+                old.replace(proc / old.name)
+        else:
+            loop_id = None
+        try:
+            goal, criteria = parse_seed(args.seed)
+        except ValueError as exc:
+            print(f"[A] ungueltiger Seed: {exc}")
+            return 2
+        print(f"[A] goal-loop: goal={goal!r} criteria={len(criteria)} "
+              f"repo={args.repo} max_rounds={args.max_rounds}")
+        summary = run_goal_loop(
+            goal=goal, done_criteria=criteria, repo=args.repo,
+            base_branch=args.base_branch, max_rounds=args.max_rounds,
+            round_timeout=args.round_timeout, loop_id=loop_id)
+        print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
+        if summary["accepted"]:
+            print(f"    ACCEPTED auf {summary['final_branch']}@"
+                  f"{summary['final_commit']}")
+            return 0
+        if summary["escalated"]:
+            print(f"    ESKALIERT ({summary['escalation_trigger']}) — "
+                  f"siehe ESCALATION-{summary['loop_id']}.md")
+            return 3
+        return 1
 
     print(f"[A] Bridge-Root: {bc.bridge_root()}")
     print(f"[A] Loop: seed={args.seed} max_rounds={args.max_rounds} "

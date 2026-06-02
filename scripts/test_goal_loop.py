@@ -313,3 +313,42 @@ def test_goal_loop_dangerous_diff_escalates(monkeypatch, tmp_path):
     assert fired["n"] == 0
     meta = ld.read_escalation(summary["loop_id"])
     assert meta["trigger"] == "dangerous_action"
+
+
+# --- Task 10: CLI + resume validation ---
+
+def test_main_goal_loop_requires_repo(monkeypatch, tmp_path, capsys):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
+                  "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
+    assert rc == 2
+    assert "repo" in capsys.readouterr().out.lower()
+
+
+def test_resume_max_rounds_allows_unchanged(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    ld.write_escalation(
+        loop_id="loop-r", trigger="max_rounds", round_no=1, branch="bridge/loop-r",
+        commit="c1", goal="G", criteria_status=[("c", False)],
+        reason="max", question="more?", progress="p")
+    ok, _msg = ld.validate_resume("loop-r", new_seed_text=None)
+    assert ok is True
+
+
+def test_resume_other_trigger_requires_changed_seed(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    ld.write_escalation(
+        loop_id="loop-s", trigger="stagnation", round_no=1, branch="bridge/loop-s",
+        commit="c1", goal="G", criteria_status=[("c", False)],
+        reason="stuck", question="sharpen?", progress="p")
+    ok, _msg = ld.validate_resume("loop-s", new_seed_text=None)
+    assert ok is False
+    ok2, _msg2 = ld.validate_resume(
+        "loop-s", new_seed_text="## Ziel\nG2\n\n## Done-Kriterien\n- [ ] c2\n")
+    assert ok2 is True
+
+
+def test_resume_missing_escalation_fails(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    ok, _msg = ld.validate_resume("no-such-loop", new_seed_text=None)
+    assert ok is False
