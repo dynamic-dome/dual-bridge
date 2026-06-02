@@ -3,8 +3,6 @@ No real codex/git network — we monkeypatch the git helpers and the codex call.
 conftest.py isolates DUAL_BRIDGE_ROOT."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import codex_adapter as ca
 
 
@@ -49,7 +47,9 @@ def test_run_codex_task_defaults_to_task_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
     class _Proc:
-        returncode = 0; stdout = "done"; stderr = ""
+        returncode = 0
+        stdout = "done"
+        stderr = ""
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
     monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])
