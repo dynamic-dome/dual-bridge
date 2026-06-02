@@ -216,3 +216,16 @@ def test_loop_missing_verdict_is_not_accepted(monkeypatch, tmp_path):
         auftrag="build", repo="r", base_branch="main", max_rounds=2,
         round_timeout=5, interval=1, build_runner=fake_build, b_tick=b_no_verdict)
     assert summary["accepted"] is False  # None verdict never accepts
+
+
+def test_main_build_review_requires_repo(monkeypatch, tmp_path, capsys):
+    """--mode build-review without --repo exits non-zero with a clear message."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # Singleton lock would otherwise interfere; point it at tmp.
+    monkeypatch.setattr(ld.bc, "default_lock_path",
+                        lambda: tmp_path / "x.lock")
+    rc = ld.main(["--mode", "build-review", "--max-rounds", "1",
+                  "--seed", "build it"])
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "repo" in out.lower()

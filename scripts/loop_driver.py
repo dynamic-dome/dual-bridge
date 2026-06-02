@@ -331,6 +331,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="Max seconds to wait for B's result per round.")
     parser.add_argument("--interval", type=float, default=5.0,
                         help="Poll interval seconds while waiting for a result.")
+    parser.add_argument("--mode", default="ping-pong",
+                        choices=["ping-pong", "build-review"],
+                        help="ping-pong (Stage 1) or build-review (Stage 2b).")
+    parser.add_argument("--repo", default="",
+                        help="Repo URL/path to build in (build-review mode).")
+    parser.add_argument("--base-branch", default="main",
+                        help="Base branch to start the loop branch from.")
     args = parser.parse_args(argv)
 
     # Singleton: one loop driver per machine (reuses the poller lock pattern,
@@ -339,6 +346,33 @@ def main(argv: list[str] | None = None) -> int:
     if not bc.acquire_singleton_lock(lock):
         print("[A] Ein Loop-Treiber laeuft bereits -- ich beende mich.")
         return 0
+
+    if args.mode == "build-review":
+        if not args.repo:
+            print("[A] --mode build-review braucht --repo.")
+            return 2
+        print(f"[A] Build-Review-Loop: repo={args.repo} "
+              f"base={args.base_branch} max_rounds={args.max_rounds}")
+        try:
+            summary = run_build_review_loop(
+                auftrag=args.seed, repo=args.repo, base_branch=args.base_branch,
+                max_rounds=args.max_rounds, round_timeout=args.round_timeout,
+                interval=args.interval, build_runner=None, b_tick=None)
+        except KeyboardInterrupt:
+            print("\n[A] Strg+C — Loop abgebrochen.")
+            return 1
+        print("=" * 60)
+        print(f"[A] Build-Review-Loop {summary['loop_id']} fertig.")
+        print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
+        print(f"    Akzeptiert: {summary['accepted']}")
+        print(f"    Branch: {summary['final_branch']} @ {summary['final_commit']}")
+        if summary["aborted"]:
+            print(f"    ABGEBROCHEN: {summary['abort_reason']}")
+            if summary["open_task_id"]:
+                print(f"    Offener Task: {summary['open_task_id']}")
+        print(f"    History: {STATE_DIR / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+        print("=" * 60)
+        return 0 if summary["accepted"] else 1
 
     print(f"[A] Bridge-Root: {bc.bridge_root()}")
     print(f"[A] Loop: seed={args.seed} max_rounds={args.max_rounds} "
