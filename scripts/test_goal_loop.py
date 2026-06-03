@@ -264,6 +264,50 @@ def test_goal_loop_reviewer_escalate(monkeypatch, tmp_path):
     assert meta["trigger"] == "reviewer_requested"
 
 
+def _b_verdict_body_only(verdict, body_reason):
+    """A b_tick that mirrors the REAL handoff_poll result: parse_verdict leaves
+    verdict_reason empty for a bare verdict, so the reviewer's reasoning lives
+    ONLY in the document body (under '## Antwort'/'## Begründung'). The multi-line
+    payload frontmatter collapses to the first heading line ('## Begründung') —
+    exactly the known-MINOR data path."""
+    def tick(task_id):
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+              "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+              "kind": "review", "verdict": verdict,
+              # multi-line payload → parse_frontmatter keeps only line 1
+              "payload": f"## Begründung\n\n{body_reason}"}
+        body = f"## Antwort\n## Begründung\n\n{body_reason}\n\nVERDICT: {verdict}\n"
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, body))
+    return tick
+
+
+def test_goal_loop_escalation_carries_real_body_reason(monkeypatch, tmp_path):
+    """Known-MINOR fix (2026-06-03): the reviewer's real reason lives in the
+    result BODY, not the truncated frontmatter payload ('## Begründung'). The
+    escalation file must surface that real reason so the owner sees WHY, not a
+    bare heading."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    real = "Kriterium 2 ist aus dem isolierten Docstring-Diff nicht belegbar."
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]),
+        b_tick=_b_verdict_body_only("escalate", real))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "reviewer_requested"
+    # The escalation reason lives in the file body under '## Eskalations-Grund'.
+    esc_path = ld._escalation_path(summary["loop_id"])
+    esc_text = bc.read_text_utf8(esc_path)
+    assert real in esc_text, \
+        f"escalation file lost the real reviewer reason:\n{esc_text}"
+    # And it must NOT be the bare collapsed heading.
+    assert "## Eskalations-Grund\n## Begründung" not in esc_text
+    assert "Reviewer fordert Eskalation: ## Begründung" not in esc_text
+
+
 # --- Task 8: stagnation + max-rounds ---
 
 def test_goal_loop_stagnation_same_commit(monkeypatch, tmp_path):

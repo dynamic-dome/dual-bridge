@@ -50,6 +50,40 @@ def _reason_carries_signal(reason: str | None) -> bool:
     return True
 
 
+def _reason_from_body(body: str | None) -> str:
+    """Pull the reviewer's real reasoning out of a result document body.
+
+    parse_frontmatter keeps only the FIRST line of a multi-line YAML payload, so
+    the frontmatter 'payload' collapses to a bare '## Begründung' heading and the
+    real reason is lost there (known-MINOR, 2026-06-03). The full reasoning still
+    lives in the document body, under '## Antwort' and/or a '## Begründung'
+    heading. Return the prose under those headings (the VERDICT marker line and
+    surrounding blank lines stripped), or '' if nothing usable is found."""
+    if not body:
+        return ""
+    lines = body.splitlines()
+    # Find the start of the reasoning: prefer a '## Begründung' heading, else the
+    # '## Antwort' section, else the whole body.
+    start = 0
+    for i, ln in enumerate(lines):
+        s = ln.strip().lower()
+        if s.startswith("##") and "begründung" in s:
+            start = i + 1
+            break
+        if s.startswith("##") and "antwort" in s:
+            start = i + 1  # keep scanning — a later Begründung wins
+    kept = []
+    for ln in lines[start:]:
+        s = ln.strip()
+        if s.lower().startswith("verdict:"):
+            continue  # the machine marker, not prose
+        if s.startswith("##") and ("begründung" in s.lower()
+                                   or "antwort" in s.lower()):
+            continue  # skip a repeated section heading, keep its content
+        kept.append(ln)
+    return "\n".join(kept).strip()
+
+
 def parse_seed(seed_text: str) -> tuple[str, list[str]]:
     """Split a structured goal-loop seed into (goal, done_criteria).
 
@@ -329,10 +363,17 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
         return {"status": "error", "abort_reason": f"B error in round {round_no}",
                 "verdict": None, "verdict_reason": None,
                 "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
-    # parse_verdict yields an empty reason for accepted/escalate/bare-rejected,
-    # but the reviewer's full analysis lives in the result `payload`. Surface it
-    # so the escalation file carries the real reasoning, not "(kein Grund)".
-    reason = fm_result.get("verdict_reason") or fm_result.get("payload") or ""
+    # parse_verdict yields an empty reason for accepted/escalate/bare-rejected.
+    # The reviewer's full analysis lives in the document BODY; the frontmatter
+    # `payload` is truncated to its first line ('## Begründung') by
+    # parse_frontmatter, so prefer the body-extracted reason when neither the
+    # explicit verdict_reason nor a body reason... fall back to payload last so
+    # the escalation file carries real reasoning, not a bare heading (known-MINOR
+    # 2026-06-03).
+    reason = fm_result.get("verdict_reason")
+    if not _reason_carries_signal(reason):
+        body_reason = _reason_from_body(fm_result.get("_body"))
+        reason = body_reason or fm_result.get("payload") or reason or ""
     return {"status": "done", "abort_reason": "",
             "verdict": fm_result.get("verdict"),
             "verdict_reason": reason,
@@ -708,8 +749,13 @@ def wait_for_result(task_id: str, timeout: int, interval: float = 5):
     while True:
         path = bc.lane_inbox(lane) / target_name
         if path.exists() and not _is_conflict_copy(path.name):
-            fm, _ = bc.parse_frontmatter(bc.read_text_utf8(path))
+            fm, body = bc.parse_frontmatter(bc.read_text_utf8(path))
             if fm.get("task_id"):  # complete file — a real hit
+                # Carry the document body so callers can recover the reviewer's
+                # full reasoning (the frontmatter payload is truncated to its
+                # first line by parse_frontmatter). Reserved key, never a task
+                # field, so it can't collide with a real frontmatter key.
+                fm["_body"] = body
                 try:
                     (bc.lane_processed(lane) / target_name).unlink(missing_ok=True)
                     path.replace(bc.lane_processed(lane) / target_name)
