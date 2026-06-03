@@ -142,6 +142,31 @@ def test_parse_pretty_printed_json_array_not_misread_as_ndjson() -> None:
     print("  codex OK — pretty-printed JSON array -> single value, not NDJSON")
 
 
+def test_parse_real_codex_0136_ndjson_sequence() -> None:
+    """DCO #7729 / P006: pin the BYTE-EXACT event sequence emitted by a REAL
+    `codex exec --json` run, not just a hand-guessed fixture.
+
+    Captured 2026-06-03 from codex-cli 0.136.0 on Laptop A
+    (`echo "Antworte mit genau dem Wort: PINGPONG" | codex exec --json
+    --skip-git-repo-check -s read-only -`). The four real events are:
+      thread.started -> turn.started -> item.completed(item.text) -> turn.completed(usage)
+    The answer lives in item.completed's item.text; the trailing turn.completed
+    (usage) must NOT shadow it. Verified live: parse_codex_output -> "PINGPONG".
+    This test fails loudly if a future codex version drifts the schema (the -o
+    answer.txt path masks this in production today, QW1)."""
+    import codex_adapter as cx
+    importlib.reload(cx)
+    raw = (
+        '{"thread_id":"019e8dbd-81bc-7702-87c9-3f0b1a9242c0","type":"thread.started"}\n'
+        '{"type":"turn.started"}\n'
+        '{"item":{"id":"item_0","text":"PINGPONG","type":"agent_message"},"type":"item.completed"}\n'
+        '{"type":"turn.completed","usage":{"cached_input_tokens":0,"input_tokens":2500,'
+        '"output_tokens":7,"reasoning_output_tokens":0}}\n'
+    )
+    assert cx.parse_codex_output(raw) == "PINGPONG"
+    print("  codex OK — REAL codex-0.136 NDJSON sequence -> item.text answer")
+
+
 def main() -> int:
     print("=== QW1 Codex-Adapter NDJSON-Tests ===")
     tests = [
@@ -155,6 +180,7 @@ def main() -> int:
         test_parse_ndjson_trailing_error_event_with_message_does_not_shadow,
         test_parse_ndjson_unknown_answer_type_is_not_dropped,
         test_parse_pretty_printed_json_array_not_misread_as_ndjson,
+        test_parse_real_codex_0136_ndjson_sequence,
     ]
     failed = 0
     for t in tests:
