@@ -16,6 +16,35 @@ def _reload_as_a(monkeypatch, tmp_path):
     return loop_driver
 
 
+def _a_live_foreign_pid():
+    """A currently-alive PID that is NOT this process, or None if none found.
+
+    Used to simulate the recycled-but-live foreign lock holder from DCO #7728.
+    bc._pid_alive is the same liveness oracle main() uses, so the chosen PID is
+    guaranteed to read as 'live' for acquire_singleton_lock."""
+    import os as _os
+    for cand in (_os.getppid(), 4):  # parent process, then a low system pid
+        if cand and cand != _os.getpid() and bc._pid_alive(cand):
+            return cand
+    if _os.name == "nt":
+        import csv
+        import io
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["tasklist", "/NH", "/FO", "CSV"],
+                capture_output=True, text=True, encoding="oem",
+            ).stdout
+        except OSError:
+            return None
+        for row in csv.reader(io.StringIO(out)):
+            if len(row) > 1 and row[1].strip().isdigit():
+                pid = int(row[1])
+                if pid > 4 and pid != _os.getpid() and bc._pid_alive(pid):
+                    return pid
+    return None
+
+
 # --- Task 1: parse_verdict escalate ---
 
 def test_parse_verdict_escalate():
@@ -323,6 +352,43 @@ def test_main_goal_loop_requires_repo(monkeypatch, tmp_path, capsys):
                   "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
     assert rc == 2
     assert "repo" in capsys.readouterr().out.lower()
+
+
+def test_main_goal_loop_lock_is_test_isolated(monkeypatch, tmp_path, capsys):
+    """Regression DCO #7728: the singleton lock must be test-isolated.
+
+    Before the conftest DUAL_BRIDGE_LOCK isolation, main() took a lock at a
+    SHARED system-temp path (dual-bridge-loop.lock). A parallel/leftover run that
+    held it with a recycled-but-live PID made acquire_singleton_lock() return
+    False, so main() exited with rc=0 ("ein Loop laeuft bereits") instead of the
+    expected rc=2 -> flaky. We plant a foreign LIVE-PID lock at the GLOBAL temp
+    path and assert the test still reaches the requires-repo check (rc=2),
+    proving the loop driver's lock no longer collides with the shared path."""
+    import tempfile
+    from pathlib import Path
+
+    foreign_pid = _a_live_foreign_pid()
+    if foreign_pid is None:
+        import pytest
+        pytest.skip("no foreign live PID available to simulate a lock holder")
+
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A FOREIGN live PID (not our own) is the holder that triggered #7728:
+    # acquire_singleton_lock only takes over a lock held by os.getpid() or a dead
+    # pid, so a foreign-live holder is what made the shared lock collide.
+    global_loop_lock = (
+        Path(tempfile.gettempdir()) / "dual-bridge-poller.lock"
+    ).with_name("dual-bridge-loop.lock")
+    global_loop_lock.write_text(f"{foreign_pid}\nstale\n", encoding="utf-8")
+    try:
+        rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
+                      "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
+        assert rc == 2, (
+            "loop lock collided with the shared temp path -> not isolated"
+        )
+        assert "repo" in capsys.readouterr().out.lower()
+    finally:
+        global_loop_lock.unlink(missing_ok=True)
 
 
 def test_resume_max_rounds_allows_unchanged(monkeypatch, tmp_path):

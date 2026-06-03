@@ -89,6 +89,15 @@ def _isolate_dual_bridge_state(tmp_path_factory):
     default_root = tmp_path_factory.mktemp("bridge-root")
     os.environ["DUAL_BRIDGE_ROOT"] = str(default_root)
     _assert_not_real_drive(os.environ["DUAL_BRIDGE_ROOT"])
+    # Isolate the singleton lock too (DCO #7728). bc.default_lock_path() honors
+    # DUAL_BRIDGE_LOCK; without this every test — and loop_driver's derived
+    # dual-bridge-loop.lock — shared ONE system-temp lock. A leftover/parallel
+    # holder with a recycled-but-live PID then made acquire_singleton_lock()
+    # return False, flipping main()'s rc 2 -> 0 ("ein Loop laeuft bereits").
+    # Point it at this test's own tmp dir so no run can collide with another.
+    # (Cleaned up by the DUAL_BRIDGE_* snapshot/restore in the finally below.)
+    lock_dir = tmp_path_factory.mktemp("bridge-lock")
+    os.environ["DUAL_BRIDGE_LOCK"] = str(lock_dir / "poller.lock")
     _ensure_runners_registered()
     try:
         yield
