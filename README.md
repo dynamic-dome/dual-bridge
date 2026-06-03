@@ -200,3 +200,5 @@ claimed_at:
    Benachrichtigung bei Eskalation ist mit dem `bridge_notify.py` bereits gelöst.
 2. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
    mit demselben Claim-Mechanismus.
+
+Vollständiger Änderungsverlauf: [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
