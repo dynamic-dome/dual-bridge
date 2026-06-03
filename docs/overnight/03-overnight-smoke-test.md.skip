@@ -1,0 +1,9 @@
+## Ziel
+(DEAKTIVIERT via .skip — Vorlage für einen späteren Seed.)
+Füge `scripts/test_bridge_overnight.py` einen Regressionstest hinzu, der beweist, dass ein `.skip`-Seed UND ein `_done/`-Unterordner von `discover_seeds()` ignoriert werden, wenn beide gleichzeitig in der Queue liegen.
+
+## Done-Kriterien
+- [ ] ein neuer Test in `scripts/test_bridge_overnight.py` legt in einer tmp-Queue gleichzeitig eine `foo.md`, eine `bar.md.skip` und einen Unterordner `_done/baz.md` an
+- [ ] der Test prüft, dass `discover_seeds()` GENAU `[foo.md]` zurückgibt (alphabetisch, ohne skip/_done)
+- [ ] der Test ist dual-runnable (pytest + __main__) und gegen tmp isoliert
+- [ ] die volle Suite bleibt grün

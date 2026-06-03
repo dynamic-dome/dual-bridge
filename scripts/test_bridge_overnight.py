@@ -262,6 +262,86 @@ def test_seed_timeout_counts_as_error() -> None:
     print("  overnight OK — Seed-Timeout zählt als error, Folge-Seed läuft")
 
 
+# --- (10) Nicht-Seed-Dateien (README.md, Doku ohne '## Ziel') ausschließen ---
+def test_non_seed_files_excluded() -> None:
+    """Eine *.md ohne '## Ziel'-Block ist kein Seed (z.B. die README.md der Queue).
+    Sie darf NIE als goal-loop gestartet werden — sonst eskaliert jeder Lauf an
+    der Doku. Regression für den dry-run-Befund 2026-06-03 (README als Seed)."""
+    root, queue = _fresh()
+    bc, bs, bn, bo = _reload()
+    # echte Seeds (mit ## Ziel) + zwei Nicht-Seeds (README + reine Doku)
+    _seed(queue, "01-real.md")
+    _seed(queue, "02-also-real.md")
+    # Die ECHTE Queue-README enthält einen '## Ziel'-Block als Format-Beispiel —
+    # genau das schlüpfte durch eine reine '## Ziel'-Heuristik. Hier reproduziert.
+    (queue / "README.md").write_text(
+        "# Overnight-Queue\nFormat-Beispiel:\n\n## Ziel\n<dein Ziel>\n\n"
+        "## Done-Kriterien\n- <Kriterium>\n", encoding="utf-8")
+    (queue / "NOTES.md").write_text(
+        "Irgendeine Notiz ohne Zielblock.\n", encoding="utf-8")
+    runner = _Runner()
+    rec = _Recorder()
+    res = bo.run_overnight(queue_dir=queue, repo="https://x/y", max_rounds=3,
+                           run_fn=runner, send_fn=rec)
+    assert runner.calls == ["01-real.md", "02-also-real.md"], runner.calls
+    assert res.summary["total"] == 2, res.summary
+    # discover_seeds selbst liefert ebenfalls nur die echten Seeds
+    names = [p.name for p in bo.discover_seeds(queue)]
+    assert names == ["01-real.md", "02-also-real.md"], names
+    print("  overnight OK — README.md/Doku ohne '## Ziel' sind keine Seeds")
+
+
+# --- (11) Default-Queue ist repo-relativ, nicht CWD-relativ -----------------
+def test_default_queue_resolves_from_repo_root(monkeypatch=None) -> None:
+    """discover_seeds mit dem Default-Verzeichnis muss die Repo-Queue finden,
+    egal aus welchem CWD der Scheduler gestartet wird (manuell aus scripts/ vs.
+    registrierter Task aus der Repo-Wurzel). Regression für den CWD-Befund."""
+    import os as _os
+    bc, bs, bn, bo = _reload()
+    repo_root = Path(bo.__file__).resolve().parent.parent
+    real_queue = repo_root / bo.DEFAULT_QUEUE
+    # Es muss eine auflösbare Default-Queue geben, die NICHT vom CWD abhängt.
+    resolved = bo.default_queue_dir()
+    assert resolved == real_queue, (resolved, real_queue)
+    # …und sie bleibt dieselbe, egal aus welchem Arbeitsverzeichnis.
+    old = _os.getcwd()
+    try:
+        _os.chdir(str(repo_root / "scripts"))
+        assert bo.default_queue_dir() == real_queue, bo.default_queue_dir()
+        _os.chdir(str(repo_root))
+        assert bo.default_queue_dir() == real_queue, bo.default_queue_dir()
+    finally:
+        _os.chdir(old)
+    print("  overnight OK — Default-Queue repo-relativ, CWD-unabhängig")
+
+
+# --- (11b) main() OHNE --queue nutzt die repo-relative Default-Queue ----------
+def test_main_without_queue_uses_default(monkeypatch=None) -> None:
+    """main() ohne --queue muss die ECHTE repo-relative docs/overnight finden —
+    egal aus welchem CWD. Schließt die Lücke, dass nur default_queue_dir() direkt
+    getestet ist (Codex-MINOR 2026-06-03): die Verdrahtung in main() selbst.
+    Läuft mit injizierter run_fn (kein echter Loop)."""
+    import os as _os
+    root, _queue = _fresh()
+    bc, bs, bn, bo = _reload()
+    runner = _Runner()
+    rec = _Recorder()
+    repo_root = Path(bo.__file__).resolve().parent.parent
+    old = _os.getcwd()
+    try:
+        _os.chdir(str(repo_root / "scripts"))  # bewusst aus scripts/ (CWD-Falle)
+        rc = bo.main(["--repo", "https://x/y"], run_fn=runner, send_fn=rec)
+    finally:
+        _os.chdir(old)
+    # Die echten Repo-Seeds (01-*, 02-*) müssen gelaufen sein; README/.skip nicht.
+    assert rc == 0, rc
+    assert runner.calls, "main() ohne --queue fand keine Seeds (CWD-Falle?)"
+    assert all(name.endswith(".md") and name.lower() != "readme.md"
+               for name in runner.calls), runner.calls
+    assert all(not name.endswith(".skip") for name in runner.calls), runner.calls
+    print("  overnight OK — main() ohne --queue nutzt repo-relative Default-Queue")
+
+
 def main() -> int:
     print("=== Overnight-Scheduler-Tests ===")
     tests = [
@@ -274,6 +354,9 @@ def main() -> int:
         test_digest_format_and_no_notify,
         test_config_guard_requires_repo,
         test_seed_timeout_counts_as_error,
+        test_non_seed_files_excluded,
+        test_default_queue_resolves_from_repo_root,
+        test_main_without_queue_uses_default,
     ]
     failed = 0
     for t in tests:

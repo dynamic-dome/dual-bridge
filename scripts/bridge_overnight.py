@@ -36,6 +36,9 @@ RUNS_DIR_NAME = "runs"
 DEFAULT_QUEUE = "docs/overnight"
 DONE_DIR_NAME = "_done"
 SKIP_SUFFIX = ".skip"
+# Dateinamen, die nie ein Seed sind, auch wenn sie zufällig einen '## Ziel'-Block
+# als Format-Beispiel enthalten (die Queue-README dokumentiert genau dieses Format).
+_NON_SEED_NAMES = {"readme.md"}
 
 # loop_driver-Exit-Codes -> Outcome
 _EXIT_OUTCOME = {0: "accepted", 3: "escalated", 2: "error", 1: "error"}
@@ -57,19 +60,48 @@ def _write_run_record(record: dict) -> Path:
 
 
 # --- Queue -------------------------------------------------------------------
+def default_queue_dir() -> Path:
+    """Die Default-Queue REPO-relativ auflösen (scripts/ -> Repo-Wurzel ->
+    docs/overnight), nicht CWD-relativ. Sonst findet ein manueller Aufruf aus
+    scripts/ still 0 Seeds, während der registrierte Task (mit -WorkingDirectory
+    repoRoot) korrekt liefe — ein leiser, irreführender Fehlschlag."""
+    return Path(__file__).resolve().parent.parent / DEFAULT_QUEUE
+
+
+def _looks_like_seed(path: Path) -> bool:
+    """Eine *.md ist nur dann ein Seed, wenn sie (a) NICHT auf der Nicht-Seed-
+    Namensliste steht (README dokumentiert das Format inkl. einem '## Ziel'-
+    Beispiel und darf NIE selbst als Loop starten) UND (b) einen '## Ziel'-Block
+    enthält. So fliegen README/reine Doku raus — sie würden sonst als goal-loop
+    gestartet und garantiert eskalieren."""
+    if path.name.lower() in _NON_SEED_NAMES:
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 — unlesbar -> kein Seed
+        return False
+    # Exakte Heading-Zeile '## Ziel' (nicht startswith — sonst matcht z.B.
+    # '## Zielgruppe' fälschlich). Das Heading ist genau das, was loop_driver
+    # als Seed-Ziel erwartet.
+    return any(line.strip().lower() == "## ziel"
+               for line in text.splitlines())
+
+
 def discover_seeds(queue_dir: Path) -> list[Path]:
     """Seeds der Queue alphabetisch nach Dateiname. Ignoriert:
     - fehlendes/leeres Verzeichnis (-> []),
     - Unterordner (insb. _done/),
-    - Dateien mit .skip-Suffix.
-    Nur *.md auf oberster Ebene zählen.
+    - Dateien mit .skip-Suffix,
+    - *.md ohne '## Ziel'-Block (README, reine Doku — kein abnehmbares Ziel).
+    Nur *.md-Seeds auf oberster Ebene zählen.
     """
     if not queue_dir.exists() or not queue_dir.is_dir():
         return []
     seeds = [p for p in queue_dir.iterdir()
              if p.is_file()
              and p.suffix == ".md"
-             and not p.name.endswith(SKIP_SUFFIX)]
+             and not p.name.endswith(SKIP_SUFFIX)
+             and _looks_like_seed(p)]
     return sorted(seeds, key=lambda p: p.name)
 
 
@@ -197,8 +229,9 @@ def _first_goal_line(seed_text: str) -> str:
 def _parse_args(argv):
     p = argparse.ArgumentParser(
         description="Overnight-Scheduler für dual-bridge (Queue goal-loop-Seeds, read-mostly).")
-    p.add_argument("--queue", default=DEFAULT_QUEUE,
-                   help=f"Queue-Verzeichnis mit Seed-*.md (Default {DEFAULT_QUEUE}).")
+    p.add_argument("--queue", default=None,
+                   help=f"Queue-Verzeichnis mit Seed-*.md (Default: repo-relativ "
+                        f"{DEFAULT_QUEUE}).")
     p.add_argument("--repo", default="",
                    help="Repo-URL für alle Seeds (verpflichtend bei nicht-leerer Queue).")
     p.add_argument("--max-rounds", type=int, default=4,
@@ -217,7 +250,8 @@ def main(argv=None, *, run_fn=None, send_fn=None) -> int:
     2=Fehlkonfiguration (nicht-leere Queue ohne --repo), 1=unerwarteter Abbruch."""
     bc.ensure_utf8_runtime()
     args = _parse_args(argv)
-    queue_dir = Path(args.queue)
+    # Default repo-relativ (CWD-unabhängig); ein explizites --queue gewinnt.
+    queue_dir = Path(args.queue) if args.queue else default_queue_dir()
     seeds = discover_seeds(queue_dir)
 
     # fail-closed: ohne --repo darf bei nicht-leerer Queue NICHTS starten.
