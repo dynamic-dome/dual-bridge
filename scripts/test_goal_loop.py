@@ -249,6 +249,28 @@ def test_goal_loop_rejected_then_accepted_iterates(monkeypatch, tmp_path):
     assert summary["rounds_done"] == 2
 
 
+def test_reason_from_body_stops_at_foreign_heading(monkeypatch, tmp_path):
+    """_reason_from_body must not bleed trailing boilerplate sections into the
+    reason. RunnerResult.to_markdown appends '## Verdikt' / '## Artefakt (Git)'
+    after '## Antwort'; when the reviewer prose has no own '## Begründung', the
+    extractor must stop at the next FOREIGN '##' heading, not run to EOF
+    (Codex review minor 2026-06-03)."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    body = (
+        "## Quelle\ntask_id x, geclaimt ...\n\n"
+        "## Antwort\nDer echte Reviewer-Grund steht hier.\nZweite Zeile.\n\n"
+        "## Verdikt\nverdict: escalate\nverdict_reason: foo\n\n"
+        "## Artefakt (Git)\nBranch `b` auf dem Remote, Commit `c`.\n"
+    )
+    reason = ld._reason_from_body(body)
+    assert "Der echte Reviewer-Grund steht hier." in reason
+    assert "Zweite Zeile." in reason
+    assert "## Verdikt" not in reason
+    assert "verdict:" not in reason
+    assert "Artefakt" not in reason
+    assert "Branch" not in reason
+
+
 def test_goal_loop_reviewer_escalate(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     bc.ensure_dirs()

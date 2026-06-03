@@ -75,11 +75,13 @@ def _reason_from_body(body: str | None) -> str:
     kept = []
     for ln in lines[start:]:
         s = ln.strip()
-        if s.lower().startswith("verdict:"):
-            continue  # the machine marker, not prose
-        if s.startswith("##") and ("begründung" in s.lower()
-                                   or "antwort" in s.lower()):
-            continue  # skip a repeated section heading, keep its content
+        if s.lower().startswith("verdict:") or s.lower().startswith("verdict_reason:"):
+            continue  # machine markers, not prose
+        if s.startswith("##"):
+            low = s.lower()
+            if "begründung" in low or "antwort" in low:
+                continue  # a repeated reason heading — skip it, keep its content
+            break  # a FOREIGN section (## Verdikt / ## Artefakt …) ends the reason
         kept.append(ln)
     return "\n".join(kept).strip()
 
