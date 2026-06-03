@@ -734,6 +734,14 @@ def main(argv: list[str] | None = None) -> int:
                              "(reuses the loop branch).")
     args = parser.parse_args(argv)
 
+    # Argument validation runs BEFORE the lock (Codex-Verifier MINOR 2026-06-03):
+    # a user who forgot --repo must get the actionable "--repo" error, not the
+    # "Loop laeuft bereits" lock-conflict message that would otherwise shadow it
+    # whenever another loop happens to be running.
+    if args.mode in ("build-review", "goal-loop") and not args.repo:
+        print(f"[A] --mode {args.mode} braucht --repo.")
+        return 2
+
     # Singleton: one loop driver per machine (reuses the poller lock pattern,
     # local lock file, never the Drive root). Uses a loop-specific lock name.
     lock = bc.default_lock_path().with_name("dual-bridge-loop.lock")
@@ -742,9 +750,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.mode == "build-review":
-        if not args.repo:
-            print("[A] --mode build-review braucht --repo.")
-            return 2
         print(f"[A] Build-Review-Loop: repo={args.repo} "
               f"base={args.base_branch} max_rounds={args.max_rounds}")
         try:
@@ -769,9 +774,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if summary["accepted"] else 1
 
     if args.mode == "goal-loop":
-        if not args.repo:
-            print("[A] --mode goal-loop braucht --repo.")
-            return 2
         if args.resume:
             ok, msg = validate_resume(args.resume, args.seed)
             if not ok:

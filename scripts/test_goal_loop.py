@@ -361,9 +361,58 @@ def test_main_goal_loop_lock_is_test_isolated(monkeypatch, tmp_path, capsys):
     SHARED system-temp path (dual-bridge-loop.lock). A parallel/leftover run that
     held it with a recycled-but-live PID made acquire_singleton_lock() return
     False, so main() exited with rc=0 ("ein Loop laeuft bereits") instead of the
-    expected rc=2 -> flaky. We plant a foreign LIVE-PID lock at the GLOBAL temp
-    path and assert the test still reaches the requires-repo check (rc=2),
-    proving the loop driver's lock no longer collides with the shared path."""
+    expected rc=2 -> flaky.
+
+    We plant a foreign LIVE-PID lock at the path the SHARED default WOULD resolve
+    to, then assert main() still reaches the requires-repo check (rc=2) -- proving
+    main() uses the isolated DUAL_BRIDGE_LOCK from conftest, not the shared path.
+
+    NOTE (Codex-Verifier MAJOR 2026-06-03): we redirect tempfile.gettempdir() to a
+    per-test tmp dir FIRST, so the planted "foreign holder" never touches the real
+    machine-wide lock file -- a parallel real loop_driver poller is never clobbered
+    (test-isolation discipline, global CLAUDE.md rule 3 applies to lock files too)."""
+    import tempfile
+    from pathlib import Path
+
+    foreign_pid = _a_live_foreign_pid()
+    if foreign_pid is None:
+        import pytest
+        pytest.skip("no foreign live PID available to simulate a lock holder")
+
+    # Redirect the system temp dir to an isolated tmp BEFORE planting anything,
+    # so the "shared default" path the test simulates is itself sandboxed.
+    fake_tmp = tmp_path / "faketemp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
+
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A FOREIGN live PID (not our own) is the holder that triggered #7728:
+    # acquire_singleton_lock only takes over a lock held by os.getpid() or a dead
+    # pid, so a foreign-live holder is what made the shared lock collide. Planted
+    # at the (now-sandboxed) default path -- main() must NOT resolve there.
+    shared_default_loop_lock = (
+        Path(tempfile.gettempdir()) / "dual-bridge-poller.lock"
+    ).with_name("dual-bridge-loop.lock")
+    shared_default_loop_lock.write_text(f"{foreign_pid}\nstale\n", encoding="utf-8")
+    try:
+        rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
+                      "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
+        assert rc == 2, (
+            "loop lock collided with the shared temp path -> not isolated"
+        )
+        assert "repo" in capsys.readouterr().out.lower()
+    finally:
+        shared_default_loop_lock.unlink(missing_ok=True)
+
+
+def test_main_goal_loop_arg_validation_before_lock(monkeypatch, tmp_path, capsys):
+    """Codex-Verifier MINOR 2026-06-03 (loop_driver.py order-of-ops): the --repo
+    argument check must run BEFORE the singleton lock is acquired. Otherwise a
+    user who forgot --repo while a real loop runs gets "Loop laeuft bereits"
+    (rc 0) instead of the actionable "--repo" error (rc 2) -- a misleading,
+    user-visible message. We hold the loop lock with a FOREIGN live PID at the
+    isolated path main() uses, then call main() without --repo. The arg error
+    (rc 2) must win over the lock conflict (rc 0)."""
     import tempfile
     from pathlib import Path
 
@@ -373,22 +422,19 @@ def test_main_goal_loop_lock_is_test_isolated(monkeypatch, tmp_path, capsys):
         pytest.skip("no foreign live PID available to simulate a lock holder")
 
     ld = _reload_as_a(monkeypatch, tmp_path)
-    # A FOREIGN live PID (not our own) is the holder that triggered #7728:
-    # acquire_singleton_lock only takes over a lock held by os.getpid() or a dead
-    # pid, so a foreign-live holder is what made the shared lock collide.
-    global_loop_lock = (
-        Path(tempfile.gettempdir()) / "dual-bridge-poller.lock"
-    ).with_name("dual-bridge-loop.lock")
-    global_loop_lock.write_text(f"{foreign_pid}\nstale\n", encoding="utf-8")
-    try:
-        rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
-                      "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
-        assert rc == 2, (
-            "loop lock collided with the shared temp path -> not isolated"
-        )
-        assert "repo" in capsys.readouterr().out.lower()
-    finally:
-        global_loop_lock.unlink(missing_ok=True)
+    # Hold the lock main() will try to take (the isolated DUAL_BRIDGE_LOCK path).
+    held = bc.default_lock_path().with_name("dual-bridge-loop.lock")
+    held.parent.mkdir(parents=True, exist_ok=True)
+    held.write_text(f"{foreign_pid}\nheld-by-foreign\n", encoding="utf-8")
+
+    rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
+                  "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
+    out = capsys.readouterr().out.lower()
+    assert rc == 2, f"arg validation must precede lock acquisition (got rc={rc})"
+    assert "repo" in out
+    assert "laeuft bereits" not in out, (
+        "lock conflict message leaked despite a missing required arg"
+    )
 
 
 def test_resume_max_rounds_allows_unchanged(monkeypatch, tmp_path):
