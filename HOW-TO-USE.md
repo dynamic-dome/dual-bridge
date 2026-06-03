@@ -24,6 +24,9 @@ Adapter + endpoint-relative Skripte).
 | `scripts/bridge_status.py` | **Read-only Status-Dashboard** (Tasks/Loops/Eskalationen/Liveness; `--format json`, `--watch`) |
 | `scripts/bridge_notify.py` | **Eskalations-Notifier** (pusht neue `ESCALATION-*.md` per Telegram; `--dry-run`, `--digest`, `--reconcile`) |
 | `scripts/register_notify.ps1` | Optionaler Windows-Task fuer den Notifier (lokaler Trigger) |
+| `scripts/bridge_overnight.py` | **Overnight-Scheduler** (arbeitet `docs/overnight/*.md` nachts als goal-loop ab, Morgen-Digest per Telegram; `--dry-run`, `--queue`, `--no-notify`) |
+| `scripts/register_overnight.ps1` | Optionaler Windows-Task fuer den Overnight-Scheduler (taeglich, lokaler Trigger) |
+| `docs/overnight/` | Seed-Queue fuer den Overnight-Scheduler (`README.md` erklaert das Format) |
 | `scripts/latency_probe.py` | Roundtrip-Latenz messen |
 | `README.md` | Vollreferenz: Architektur, Env-Vars, Task-Protokoll |
 | `docs/superpowers/specs/2026-05-31-dual-bridge-stage2a-modulare-v2-design.md` | Design-Spec |
@@ -65,9 +68,10 @@ Auf Laptop B vorher Endpoint setzen:
   accepted @`6ea94bc` (Continuity hart bewiesen, P007). Review-Verdikt-Semantik
   (`kind:review`) als Stage-2b-Kern enthalten.
 - ✅ **Status-Dashboard** `bridge_status.py` (read-only) + **Eskalations-Notifier**
-  `bridge_notify.py` (Telegram, lokal getriggert, idempotent) + 172 Tests grün.
-- ⬜ **Nächster Schritt:** Overnight-Scheduler (Goal-Loop laeuft nachts autonom),
-  baut auf demselben lokal-vs-DCO-Trigger-Muster auf.
+  `bridge_notify.py` (Telegram, lokal getriggert, idempotent).
+- ✅ **Overnight-Scheduler** `bridge_overnight.py`: arbeitet `docs/overnight/*.md`
+  nachts als goal-loop ab, Morgen-Digest per Telegram (read-mostly, fail-soft,
+  DCO-ready). + 181 Tests grün.
 - ⬜ **Später:** echte Verteilung (HTTP-Job-Pull, gleicher Claim-Mechanismus);
   optional DCO als alternativer Notifier-/Scheduler-Trigger.
 

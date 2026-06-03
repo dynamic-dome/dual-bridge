@@ -234,6 +234,74 @@ def send_digest(send_fn=None) -> int:
     return 1
 
 
+_OUTCOME_LABEL = {
+    "accepted": "✅ accepted",
+    "escalated": "⚠️ eskaliert",
+    "error": "❌ Fehler",
+}
+
+
+def build_overnight_digest_message(record: dict) -> str:
+    """Morgen-Zusammenfassung aus EINEM Overnight-Run-Record bauen.
+
+    record = {started, finished, seeds:[{file,goal,outcome,rounds,...}], summary}
+    Seed-Namen/Ziele sind Owner-Inhalt -> escaped. Die Labels sind bewusst Markup.
+    """
+    s = record.get("summary", {})
+    seeds = record.get("seeds", [])
+    total = s.get("total", len(seeds))
+    day = (record.get("started") or "")[:10]
+    head = f"🌙 *dual-bridge Overnight*{(' (' + day + ')') if day else ''}"
+    if total == 0:
+        return head + "\nnichts zu tun — leere Queue."
+    counts = (f"{total} Seeds · ✅ {s.get('accepted', 0)} accepted · "
+              f"⚠️ {s.get('escalated', 0)} eskaliert · ❌ {s.get('error', 0)} Fehler")
+    lines = [head, counts]
+    for seed in seeds:
+        label = _OUTCOME_LABEL.get(seed.get("outcome", ""), seed.get("outcome", ""))
+        name = _escape_md(str(seed.get("file", "?")))
+        rounds = seed.get("rounds")
+        extra = f" ({rounds} Runden)" if rounds is not None else ""
+        lines.append(f"• {name} → {label}{extra}")
+    dur = _format_duration(record.get("started"), record.get("finished"))
+    if dur:
+        lines.append(f"Dauer: {dur}")
+    return "\n".join(lines)
+
+
+def _format_duration(started: str | None, finished: str | None) -> str:
+    """ISO-Start/Ende -> 'XhYYm' bzw. 'YYm'. Leerer String, wenn nicht berechenbar."""
+    if not (started and finished):
+        return ""
+    try:
+        from datetime import datetime
+        a = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        b = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        secs = int((b - a).total_seconds())
+        if secs < 0:
+            return ""
+        h, m = secs // 3600, (secs % 3600) // 60
+        return f"{h}h{m:02d}m" if h else f"{m}m"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def send_overnight_digest(record: dict, send_fn=None) -> int:
+    """Den Morgen-Digest eines Overnight-Runs senden. Rückgabe: 1 gesendet, 0 Fehler.
+
+    Transport-agnostisch über die injizierbare send_fn (Default _post_telegram),
+    damit der Scheduler den Telegram-Pfad nicht selbst kennen muss.
+    """
+    send_fn = send_fn or _post_telegram
+    msg = build_overnight_digest_message(record)
+    try:
+        send_fn(msg)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[notify] Overnight-Digest-Versand fehlgeschlagen: {exc}")
+        return 0
+    return 1
+
+
 def reconcile() -> list:
     """sent.json gegen die aktuell offenen Eskalationen bereinigen: Einträge,
     deren Eskalation nicht mehr offen ist, entfernen. Sendet nichts. Rückgabe:

@@ -9,14 +9,25 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Geplant
-- **Overnight-Scheduler:** Goal-Loop läuft nachts autonom (lokaler Task vs. DCO,
-  selbes Trigger-Muster wie der Eskalations-Notifier).
 - **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
   mit demselben Claim-Mechanismus.
+- **DCO-Anbindung (späterer Scope):** Notifier und Overnight-Scheduler sind
+  DCO-ready gekapselt; die zentrale Orchestrierung über die `todos.db` ist noch
+  nicht verdrahtet.
 
 ## 2026-06-03
 
 ### Hinzugefügt
+- **Overnight-Scheduler** (`scripts/bridge_overnight.py`): arbeitet eine Queue
+  vordefinierter goal-loop-Seeds (`docs/overnight/*.md`) nachts seriell ab und
+  sendet morgens **einen** Telegram-Digest (accepted/eskaliert/Fehler).
+  Lokal getriggert (Windows-Task via `register_overnight.ps1`, täglich 02:00),
+  read-mostly (schreibt nur `state/_overnight/runs/<stamp>.json`), fail-soft je Seed
+  (ein Fehler bricht den Batch nicht ab), fail-closed bei Fehlkonfig (nicht-leere
+  Queue ohne `--repo` → Exit 2). Exit-Mapping aus dem loop_driver-Contract
+  (0=accepted, 3=escalated, 2/1=error). DCO-ready: Kernlogik in `run_overnight()`
+  mit injizierbarer `run_fn`. Digest baut/sendet `bridge_notify.send_overnight_digest()`.
+  9 neue Tests; Queue-Doku unter `docs/overnight/README.md`.
 - **Eskalations-Notifier** (`scripts/bridge_notify.py`, `789488f`): benachrichtigt
   per Telegram bei neuen `ESCALATION-<id>.md`. Lokal getriggert (Windows-Task via
   `register_notify.ps1`), idempotent (Dedup je `loop_id` über

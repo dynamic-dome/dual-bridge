@@ -185,9 +185,15 @@ claimed_at:
   (Dedup je `loop_id` über `state/_notify/sent.json`), at-least-once. Read-only
   auf Eskalationen — schreibt nur den eigenen Sidecar-State. DCO-ready
   (Kernlogik in `notify_new_escalations()`, nur der Caller ändert sich).
+- ✅ **Overnight-Scheduler** (`bridge_overnight.py`): arbeitet nachts eine Queue
+  vordefinierter goal-loop-Seeds (`docs/overnight/*.md`) seriell ab und sendet
+  morgens **einen** Telegram-Digest (accepted/eskaliert/Fehler). Lokal getriggert
+  (Windows-Task), read-mostly (schreibt nur `state/_overnight/runs/`), fail-soft je
+  Seed, fail-closed bei Fehlkonfig. DCO-ready (Kernlogik in `run_overnight()`,
+  injizierbare `run_fn`).
 - ✅ **Optionaler Poller-Filesystem-Wakeup** (`watchdog` wenn installiert,
   Intervall-Poll als Fallback).
-- ✅ **172 Tests grün** (Collection + voller pytest-Lauf).
+- ✅ **181 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
 > Der **freie Goal-Loop** (oben) ist gebaut+live. „Echte Verteilung / HTTP-Job-Pull"
@@ -195,10 +201,11 @@ claimed_at:
 
 ## Nächste Schritte
 
-1. **Overnight-Scheduler:** der Goal-Loop läuft nachts noch nicht automatisch.
-   Aufbau auf demselben Trigger-Muster wie der Notifier (lokaler Task vs. DCO).
-   Benachrichtigung bei Eskalation ist mit dem `bridge_notify.py` bereits gelöst.
-2. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
+1. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
    mit demselben Claim-Mechanismus.
+2. **DCO-Anbindung (späterer Scope):** Notifier und Overnight-Scheduler sind
+   DCO-ready gekapselt (`notify_new_escalations()` / `run_overnight()` mit
+   injizierbarem Caller) — die zentrale Orchestrierung über die `todos.db` ist noch
+   nicht verdrahtet.
 
 Vollständiger Änderungsverlauf: [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
