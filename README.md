@@ -158,18 +158,41 @@ claimed_at:
 - **Sibling-Surrender-Cleanup** gegen doppelte Claims desselben `task_id`.
 - **Never-crash-Poller:** ein einzelner kaputter Task reißt die Schleife nicht ab.
 
-## Verifizierter Stand (Stage 2a+, 2026-06-03)
+## Verifizierter Stand (Stufe 3 live, 2026-06-03)
 
-- ✅ **B→A-Roundtrip bewiesen** (config-only — dieselben Skripte, Richtung allein
+- ✅ **Stufe 1 (echter codex-Worker) live vertrags-bewiesen:** A schickt
+  `implement`-Task → B claimt → echter `codex exec` → Branch `bridge/task-<id>`
+  + Commit, byte-genau gegen `git show origin/<branch>` verifiziert (P007, nicht
+  Selbstbericht). Happy- + Fehlerpfad end-to-end.
+- ✅ **B→A-Roundtrip config-only bewiesen** (dieselben Skripte, Richtung allein
   per `DUAL_BRIDGE_ENDPOINT` umgedreht).
+- ✅ **Live-`claude -p`-Beweis geräteübergreifend** erbracht (im Goal-Loop: echter
+  claude-Reviewer auf B, Verdikt cross-device über die Bridge).
+- ✅ **Stufe 3 (Goal-Loop + Owner-Eskalation) live bewiesen** (`loop_driver.py`,
+  `--mode goal-loop`): offenes Ziel + Done-Kriterien, Verdikt `escalate`
+  (fail-closed), 4 Eskalations-Trigger → `ESCALATION-<id>.md`; Reseed-Resume mit
+  Continuity. Live: escalate → geschärfter Reseed → accepted @`6ea94bc`
+  (Continuity hart bewiesen). Stufe-2b-Kern (`kind:review`-Verdikt-Semantik) als
+  Vorstufe enthalten.
+- ✅ **Read-only Status-Dashboard** (`bridge_status.py`): Tasks/Loops/Eskalationen/
+  `_errors/`-Quarantäne/Poller-Liveness je Lane, text+json, `--watch`. Schreibt nie.
 - ✅ **Optionaler Poller-Filesystem-Wakeup** (`watchdog` wenn installiert,
   Intervall-Poll als Fallback).
-- ✅ **146 Tests grün** (Collection + voller pytest-Lauf).
-- ⬜ **Live-`claude -p`-Beweis über die echte Bridge steht noch aus** (Adapter ist
-  da und getestet, der geräteübergreifende Live-Lauf fehlt).
+- ✅ **158 Tests grün** (Collection + voller pytest-Lauf).
+
+> **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
+> Der **freie Goal-Loop** (oben) ist gebaut+live. „Echte Verteilung / HTTP-Job-Pull"
+> (ursprünglicher Stufe-3-Wortlaut) bleibt ein späterer Scope.
 
 ## Nächste Schritte
 
-1. **Live-`claude`-Beweis:** echter `claude -p`-Lauf geräteübergreifend über die Bridge.
-2. **Stage 2b:** Peer-Review-Loop (`kind: review`) + Overnight-Scheduler —
-   bewusst noch NICHT in 2a enthalten.
+1. **Notifikations-Transport + Overnight-Scheduler:** bauen auf der
+   `ESCALATION-<id>.md` + dem Status-Dashboard auf — der Loop kann eskalieren,
+   aber niemand wird benachrichtigt, und nachts läuft nichts automatisch. Offene
+   Vorentscheidung: Transport (Telegram vs. Pushover), Scheduler-Heimat (DCO vs.
+   lokaler Task).
+2. **Hygiene:** DCO #7728 (flaky `test_main_goal_loop_requires_repo`), DCO #7729 /
+   QW1 (codex-NDJSON-Parser gegen echte codex-Ausgabe — latenter Bug, heute durch
+   `-o answer.txt` maskiert). Plan: `docs/plans/2026-06-02-tier1-quickwins-plan.md`.
+3. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
+   mit demselben Claim-Mechanismus.

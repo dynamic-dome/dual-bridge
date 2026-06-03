@@ -8,8 +8,9 @@ diese Datei ist nur der Index: *was ist das, wo liegt was, wie startet man*.
 Dateibasierte, **bidirektionale** Handoff-Bridge zwischen zwei Laptops über den
 Google-Drive-Sharepoint. Jeder Knoten kann senden und empfangen; welcher Knoten
 welches Modell fährt (Claude / Codex / Echo) und welche Richtung er bedient, ist
-reine Konfiguration (`DUAL_BRIDGE_ENDPOINT`). Aktueller Ausbau: **Stage 2a**
-(Lanes + Adapter + endpoint-relative Skripte).
+reine Konfiguration (`DUAL_BRIDGE_ENDPOINT`). Aktueller Ausbau: **Stufe 3**
+(Goal-Loop + Owner-Eskalation, live bewiesen) auf dem Stage-2a-Fundament (Lanes +
+Adapter + endpoint-relative Skripte).
 
 ## Wo liegt was
 
@@ -19,6 +20,8 @@ reine Konfiguration (`DUAL_BRIDGE_ENDPOINT`). Aktueller Ausbau: **Stage 2a**
 | `scripts/handoff_write.py` | Task schreiben |
 | `scripts/handoff_poll.py` | Pollen + verarbeiten (Empfänger); `--watch` nutzt optional `watchdog`-Filesystem-Wakeup |
 | `scripts/handoff_collect.py` | Results einsammeln (Sender) |
+| `scripts/loop_driver.py` | Goal-Loop / Build-Review-Loop (Stufe 3, `--mode goal-loop`) |
+| `scripts/bridge_status.py` | **Read-only Status-Dashboard** (Tasks/Loops/Eskalationen/Liveness; `--format json`, `--watch`) |
 | `scripts/latency_probe.py` | Roundtrip-Latenz messen |
 | `README.md` | Vollreferenz: Architektur, Env-Vars, Task-Protokoll |
 | `docs/superpowers/specs/2026-05-31-dual-bridge-stage2a-modulare-v2-design.md` | Design-Spec |
@@ -47,18 +50,22 @@ Auf Laptop B vorher Endpoint setzen:
    `docs/superpowers/plans/...stage2a...md` — sie definieren das Lane-/Adapter-/
    Endpoint-Modell.
 2. **Tests laufen lassen** (Ground Truth vor Änderungen):
-   `cd ~/AI/dual-bridge/scripts && python -m pytest`
-   — erwartet 42 grün (`test_lanes` 11, `test_claude_adapter` 4,
-   `test_hardening` 10, `test_stage1` 17).
+   `cd ~/AI/dual-bridge/scripts && python -X utf8 -m pytest -q`
+   — erwartet **158 grün**. Schneller Snapshot des Bridge-Zustands:
+   `python bridge_status.py` (read-only, ändert nichts).
 3. Erst dann ändern. README ist die Detailreferenz.
 
 ## Aktueller Stand
 
-- ✅ **Stage 2a+ fertig:** Lanes, Adapter, Bidirektionalität, endpoint-relative
-  CLI. B→A-Roundtrip config-only bewiesen; Poller-`--watch` hat optionalen
-  Filesystem-Wakeup mit Intervall-Fallback.
-- ⬜ **Offen:** Live-`claude -p`-Beweis geräteübergreifend über die echte Bridge.
-- ⬜ **Stage 2b:** Review-Loop (`kind: review`) + Overnight-Scheduler — noch nicht begonnen.
+- ✅ **Stufe 1 (echter codex-Worker) + Stage 2a + Stufe 3 (Goal-Loop) live bewiesen.**
+  Lanes, Adapter, Bidirektionalität, endpoint-relative CLI; B→A config-only;
+  Live-`claude -p` cross-device (im Goal-Loop-Reviewer); escalate → Reseed →
+  accepted @`6ea94bc` (Continuity hart bewiesen, P007). Review-Verdikt-Semantik
+  (`kind:review`) als Stage-2b-Kern enthalten.
+- ✅ **Status-Dashboard** `bridge_status.py` (read-only) + 158 Tests grün.
+- ⬜ **Nächster Schritt:** Notifikations-Transport + Overnight-Scheduler (auf
+  `ESCALATION-<id>.md` + Dashboard aufbauend). Hygiene: DCO #7728/#7729 + Tier-1-QW.
+- ⬜ **Später:** echte Verteilung (HTTP-Job-Pull, gleicher Claim-Mechanismus).
 
 ## Wichtigste Env-Vars
 
