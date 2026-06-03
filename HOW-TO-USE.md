@@ -22,6 +22,8 @@ Adapter + endpoint-relative Skripte).
 | `scripts/handoff_collect.py` | Results einsammeln (Sender) |
 | `scripts/loop_driver.py` | Goal-Loop / Build-Review-Loop (Stufe 3, `--mode goal-loop`) |
 | `scripts/bridge_status.py` | **Read-only Status-Dashboard** (Tasks/Loops/Eskalationen/Liveness; `--format json`, `--watch`) |
+| `scripts/bridge_notify.py` | **Eskalations-Notifier** (pusht neue `ESCALATION-*.md` per Telegram; `--dry-run`, `--digest`, `--reconcile`) |
+| `scripts/register_notify.ps1` | Optionaler Windows-Task fuer den Notifier (lokaler Trigger) |
 | `scripts/latency_probe.py` | Roundtrip-Latenz messen |
 | `README.md` | Vollreferenz: Architektur, Env-Vars, Task-Protokoll |
 | `docs/superpowers/specs/2026-05-31-dual-bridge-stage2a-modulare-v2-design.md` | Design-Spec |
@@ -51,7 +53,7 @@ Auf Laptop B vorher Endpoint setzen:
    Endpoint-Modell.
 2. **Tests laufen lassen** (Ground Truth vor Änderungen):
    `cd ~/AI/dual-bridge/scripts && python -X utf8 -m pytest -q`
-   — erwartet **158 grün**. Schneller Snapshot des Bridge-Zustands:
+   — erwartet **171 grün**. Schneller Snapshot des Bridge-Zustands:
    `python bridge_status.py` (read-only, ändert nichts).
 3. Erst dann ändern. README ist die Detailreferenz.
 
@@ -62,10 +64,12 @@ Auf Laptop B vorher Endpoint setzen:
   Live-`claude -p` cross-device (im Goal-Loop-Reviewer); escalate → Reseed →
   accepted @`6ea94bc` (Continuity hart bewiesen, P007). Review-Verdikt-Semantik
   (`kind:review`) als Stage-2b-Kern enthalten.
-- ✅ **Status-Dashboard** `bridge_status.py` (read-only) + 158 Tests grün.
-- ⬜ **Nächster Schritt:** Notifikations-Transport + Overnight-Scheduler (auf
-  `ESCALATION-<id>.md` + Dashboard aufbauend). Hygiene: DCO #7728/#7729 + Tier-1-QW.
-- ⬜ **Später:** echte Verteilung (HTTP-Job-Pull, gleicher Claim-Mechanismus).
+- ✅ **Status-Dashboard** `bridge_status.py` (read-only) + **Eskalations-Notifier**
+  `bridge_notify.py` (Telegram, lokal getriggert, idempotent) + 172 Tests grün.
+- ⬜ **Nächster Schritt:** Overnight-Scheduler (Goal-Loop laeuft nachts autonom),
+  baut auf demselben lokal-vs-DCO-Trigger-Muster auf.
+- ⬜ **Später:** echte Verteilung (HTTP-Job-Pull, gleicher Claim-Mechanismus);
+  optional DCO als alternativer Notifier-/Scheduler-Trigger.
 
 ## Wichtigste Env-Vars
 
@@ -75,5 +79,6 @@ Auf Laptop B vorher Endpoint setzen:
 | `DUAL_BRIDGE_ROOT` | Bridge-Ordner (falls Drive-Pfad auf B abweicht) | Sharepoint-Pfad |
 | `DUAL_BRIDGE_WORKROOT` | Arbeitsverzeichnis für codex/claude-Runner | `~/dual-bridge-work` |
 | `DUAL_BRIDGE_REPO_ALLOWLIST` | codex-Repo-Allowlist (fnmatch, Komma-getrennt) | leer = alle |
+| `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram-Credentials für `bridge_notify.py` (mit DCO geteilt; `DUAL_BRIDGE_TG_TOKEN`/`DUAL_BRIDGE_TG_CHAT` als Override) | — |
 
 Vollständige Env-Var-Tabelle: [README → Konfiguration](README.md#konfiguration-env-vars).

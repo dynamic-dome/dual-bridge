@@ -109,6 +109,10 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | `DUAL_BRIDGE_CODEX_BIN` | Pfad zum `codex`-Binary | auto (`shutil.which`) |
 | `DUAL_BRIDGE_CODEX_TIMEOUT` | codex-Timeout in Sekunden | `600` |
 | `DUAL_BRIDGE_CLAUDE_BIN` | Pfad zum `claude`-Binary | auto (`shutil.which`) |
+| `TELEGRAM_TOKEN` | Telegram-Bot-Token für den Eskalations-Notifier (mit DCO geteilt) | — |
+| `TELEGRAM_CHAT_ID` | Telegram-Chat-ID, an die der Notifier sendet (mit DCO geteilt) | — |
+| `DUAL_BRIDGE_TG_TOKEN` | Override für `TELEGRAM_TOKEN` (nur dual-bridge) | leer = `TELEGRAM_TOKEN` |
+| `DUAL_BRIDGE_TG_CHAT` | Override für `TELEGRAM_CHAT_ID` (nur dual-bridge) | leer = `TELEGRAM_CHAT_ID` |
 
 Endpoint-Werte: `claude@laptop-a` (sendet A→B, empfängt B→A) oder
 `codex@laptop-b` (sendet B→A, empfängt A→B).
@@ -176,9 +180,14 @@ claimed_at:
   Vorstufe enthalten.
 - ✅ **Read-only Status-Dashboard** (`bridge_status.py`): Tasks/Loops/Eskalationen/
   `_errors/`-Quarantäne/Poller-Liveness je Lane, text+json, `--watch`. Schreibt nie.
+- ✅ **Eskalations-Notifier** (`bridge_notify.py`): benachrichtigt per Telegram bei
+  neuen `ESCALATION-<id>.md`, lokal getriggert (Windows-Task), idempotent
+  (Dedup je `loop_id` über `state/_notify/sent.json`), at-least-once. Read-only
+  auf Eskalationen — schreibt nur den eigenen Sidecar-State. DCO-ready
+  (Kernlogik in `notify_new_escalations()`, nur der Caller ändert sich).
 - ✅ **Optionaler Poller-Filesystem-Wakeup** (`watchdog` wenn installiert,
   Intervall-Poll als Fallback).
-- ✅ **158 Tests grün** (Collection + voller pytest-Lauf).
+- ✅ **172 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
 > Der **freie Goal-Loop** (oben) ist gebaut+live. „Echte Verteilung / HTTP-Job-Pull"
@@ -186,13 +195,8 @@ claimed_at:
 
 ## Nächste Schritte
 
-1. **Notifikations-Transport + Overnight-Scheduler:** bauen auf der
-   `ESCALATION-<id>.md` + dem Status-Dashboard auf — der Loop kann eskalieren,
-   aber niemand wird benachrichtigt, und nachts läuft nichts automatisch. Offene
-   Vorentscheidung: Transport (Telegram vs. Pushover), Scheduler-Heimat (DCO vs.
-   lokaler Task).
-2. **Hygiene:** DCO #7728 (flaky `test_main_goal_loop_requires_repo`), DCO #7729 /
-   QW1 (codex-NDJSON-Parser gegen echte codex-Ausgabe — latenter Bug, heute durch
-   `-o answer.txt` maskiert). Plan: `docs/plans/2026-06-02-tier1-quickwins-plan.md`.
-3. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
+1. **Overnight-Scheduler:** der Goal-Loop läuft nachts noch nicht automatisch.
+   Aufbau auf demselben Trigger-Muster wie der Notifier (lokaler Task vs. DCO).
+   Benachrichtigung bei Eskalation ist mit dem `bridge_notify.py` bereits gelöst.
+2. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
    mit demselben Claim-Mechanismus.
