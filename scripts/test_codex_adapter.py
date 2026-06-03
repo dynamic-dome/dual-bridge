@@ -15,6 +15,31 @@ import importlib
 import sys
 
 
+def test_build_codex_cmd_uses_hang_safe_flags() -> None:
+    """The seed-02 hang (2026-06-03) was root-caused to codex 0.136's Windows
+    workspace-write sandbox: it blocks pytest tmp/.pytest_cache writes in %TEMP%,
+    fails seeds whose criteria run tests at fixture setup, and sends codex into a
+    %TEMP%-probing shell loop where the synchronous superpowers SessionStart hook
+    deadlocks. The fix pins two flags. This test guards them against regression."""
+    import codex_adapter as cx
+    importlib.reload(cx)
+    from pathlib import Path
+
+    cmd = cx._build_codex_cmd("codex", Path("/wd"), Path("/wr/.codex-answer-x.txt"))
+
+    # sandbox dropped (the actual hang fix) — never silently back to workspace-write
+    assert "danger-full-access" in cmd, cmd
+    assert "workspace-write" not in cmd, cmd
+    # non-interactive approval policy so a write can never block on approval
+    assert "-c" in cmd and 'approval_policy="never"' in cmd, cmd
+    # invariants that must survive the refactor
+    assert cmd[:2] == ["codex", "exec"], cmd
+    assert "--skip-git-repo-check" in cmd, cmd
+    assert cmd[-1] == "-", cmd                       # prompt via stdin (P008)
+    assert "-o" in cmd, cmd
+    print("  codex OK — _build_codex_cmd pins danger-full-access + approval=never")
+
+
 def test_parse_ndjson_multi_event_returns_last_answer() -> None:
     """3-line NDJSON stream -> the answer from the final item.completed event,
     not "" (the old single raw_decode would only see thread.started)."""
@@ -170,6 +195,7 @@ def test_parse_real_codex_0136_ndjson_sequence() -> None:
 def main() -> int:
     print("=== QW1 Codex-Adapter NDJSON-Tests ===")
     tests = [
+        test_build_codex_cmd_uses_hang_safe_flags,
         test_parse_ndjson_multi_event_returns_last_answer,
         test_parse_ndjson_standard_codex_sequence_skips_turn_completed,
         test_parse_single_json_object_unchanged,

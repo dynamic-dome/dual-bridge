@@ -268,6 +268,58 @@ def _git_diff(workdir: Path, base_branch: str) -> str:
     return text
 
 
+def _build_codex_cmd(codex_exe: str, workdir: Path, answer_file: Path) -> list[str]:
+    """Assemble the `codex exec` argv for one non-interactive build.
+
+    Flags verified against codex-cli 0.136 (`codex exec --help`):
+      -C <workdir>            explicit working root
+      -s danger-full-access   NO sandbox. Required, not a convenience: codex
+                              0.136's Windows workspace-write sandbox blocks
+                              pytest's tmp_path_factory / .pytest_cache writes
+                              (they land in %TEMP%, outside the writable roots,
+                              and --add-dir does not reliably whitelist %TEMP%
+                              on Windows). A seed whose done-criteria run the
+                              test suite then fails every test at fixture setup
+                              with WinError 5, sends codex into an exploratory
+                              %TEMP%-probing shell loop, and the synchronous
+                              no-timeout superpowers SessionStart hook
+                              (cmd->bash polyglot) deadlocks there -> the whole
+                              python->node->codex.exe tree hangs past `timeout`.
+                              Dropping the sandbox is safe HERE because the
+                              workdir is itself a throwaway clone isolated from
+                              the real repo, and the loop draws the real
+                              boundary (allowlist + escalate-on-dangerous).
+                              (Root-caused 2026-06-03, seed-02 hang.)
+      -c approval_policy="never"
+                              exec is non-interactive: with the default
+                              escalate-to-user policy a write that needs
+                              approval can never get it, so codex reports
+                              "read-only / approvals disabled" and then probes
+                              for a writable dir -> same hang path. "never"
+                              makes failures return immediately instead.
+      --skip-git-repo-check   the workdir is a freshly cloned+branched git repo
+                              by construction; codex 0.135+ otherwise refuses on
+                              a tree it doesn't recognise as trusted.
+      -o <answer.txt>         final agent message to a file (robust; sidesteps
+                              the BOM/event-stream/hook-noise stdout parsing of
+                              L17). Lives OUTSIDE the workdir so `git status`
+                              never picks it up.
+      -                       prompt via STDIN, NOT as a CLI arg (rule 10.8 /
+                              P008): a long prompt with backticks/parens/newlines
+                              as an argument is mangled by B's codex.CMD wrapper
+                              at the cmd.exe quoting layer.
+    """
+    return [
+        codex_exe, "exec",
+        "-C", str(workdir),
+        "-s", "danger-full-access",
+        "-c", 'approval_policy="never"',
+        "--skip-git-repo-check",
+        "-o", str(answer_file),
+        "-",
+    ]
+
+
 def run_codex_task(
     auftrag: str,
     repo: str,
@@ -316,36 +368,11 @@ def run_codex_task(
     except RuntimeError as exc:
         return CodexResult(status="error", error_text=str(exc))
 
-    # 4. codex exec -- flags verified against codex-cli 0.133 (`codex exec --help`):
-    #      -C <workdir>          explicit working root
-    #      -s workspace-write    sandbox that may write inside the workspace
-    #      -o <answer.txt>       final agent message written to a file (robust;
-    #                            avoids the BOM/event-stream/hook-noise stdout
-    #                            parsing problem of L17 entirely)
-    #    Prompt via STDIN with the positional arg '-', NOT as a CLI argument
-    #    (global rule 10.8 / P008, observed live 2026-05-31): a long prompt with
-    #    backticks/parens/newlines passed as an argument is mangled/truncated by
-    #    B's codex.CMD wrapper at the cmd.exe quoting layer — codex then sees the
-    #    prompt only up to the first word. `codex exec --help`: "If not provided
-    #    as an argument (or if `-` is used), instructions are read from stdin."
-    #    So we pass '-' and pipe the prompt on stdin; cmd.exe never touches it.
-    #    (Same fix the claude_adapter already carries.)
-    #    The -o answer file lives OUTSIDE the workdir, so it can never be picked
-    #    up by `git status` / committed (cleaner than relying on a post-unlink).
+    # 4. codex exec -- argv assembled by _build_codex_cmd (flags + rationale
+    #    documented there; verified against codex-cli 0.136). The -o answer file
+    #    lives OUTSIDE the workdir, so it can never be picked up by `git status`.
     answer_file = Path(workroot) / f".codex-answer-{task_id}.txt"
-    # --skip-git-repo-check: we just cloned the repo and checked out a fresh
-    # bridge/task-<id> branch ourselves, so the workdir IS a git repo by
-    # construction. codex 0.135 otherwise refuses with "Not inside a trusted
-    # directory and --skip-git-repo-check was not specified." on a freshly
-    # cloned/branched tree it doesn't recognise as trusted (observed 2026-05-31).
-    cmd = [
-        codex_exe, "exec",
-        "-C", str(workdir),
-        "-s", "workspace-write",
-        "--skip-git-repo-check",
-        "-o", str(answer_file),
-        "-",
-    ]
+    cmd = _build_codex_cmd(codex_exe, workdir, answer_file)
     try:
         proc = subprocess.run(
             cmd, cwd=str(workdir), capture_output=True, text=True,
