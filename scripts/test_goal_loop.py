@@ -279,6 +279,22 @@ def test_goal_loop_stagnation_same_commit(monkeypatch, tmp_path):
     assert summary["escalation_trigger"] == "stagnation"
 
 
+def test_reason_carries_signal_classifies_boilerplate_vs_real(monkeypatch, tmp_path):
+    """Unit-pin _reason_carries_signal: empty + ATX headings are no-signal;
+    a real reason (even one starting with '#123', no space) carries signal."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # no signal
+    assert ld._reason_carries_signal(None) is False
+    assert ld._reason_carries_signal("") is False
+    assert ld._reason_carries_signal("   ") is False
+    assert ld._reason_carries_signal("## Begründung") is False
+    assert ld._reason_carries_signal("# Heading") is False
+    # signal
+    assert ld._reason_carries_signal("Kriterium 2 nicht belegbar") is True
+    assert ld._reason_carries_signal("#123 failing test still open") is True
+    assert ld._reason_carries_signal("## Begründung\n\nDer echte Grund.") is True
+
+
 def test_goal_loop_stagnation_repeated_reason(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     bc.ensure_dirs()
@@ -290,6 +306,27 @@ def test_goal_loop_stagnation_repeated_reason(monkeypatch, tmp_path):
         b_tick=_b_verdict("rejected", reason="same gap"))
     assert summary["escalated"] is True
     assert summary["escalation_trigger"] == "stagnation"
+
+
+def test_goal_loop_markdown_heading_reason_is_not_stagnation(monkeypatch, tmp_path):
+    """Regression for the live seed-02 spurious stagnation (2026-06-03).
+
+    parse_frontmatter returns only the FIRST line of a multi-line YAML payload,
+    so a reviewer answer that starts with a '## Begründung' heading collapses to
+    verdict_reason='## Begründung' EVERY round. A bare Markdown heading carries no
+    differentiating signal — identical headings across rounds must NOT be read as
+    a repeated reason. With distinct commits the loop should run to max_rounds,
+    not escalate on stagnation after round 2."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=2, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1", "c2"]),
+        b_tick=_b_verdict("rejected", reason="## Begründung"))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "max_rounds", \
+        f"bare heading reason spuriously stagnated: {summary['escalation_trigger']!r}"
 
 
 def test_goal_loop_max_rounds(monkeypatch, tmp_path):

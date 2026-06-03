@@ -65,6 +65,76 @@ def _fake_codex_appends(monkeypatch, line_holder):
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
 
+def _fake_codex_self_commits(monkeypatch, line_holder):
+    """Like _fake_codex_appends, but the fake codex ALSO commits its own change
+    (git add + commit) before returning — exactly what real codex-cli 0.136 does
+    under -s danger-full-access. The result: the workdir's working tree is CLEAN
+    after codex runs, but HEAD is one commit ahead of origin/base. This is the
+    seam that broke the live seed-02 round-2 review (2026-06-03): the adapter
+    decided "no change" from `git status --porcelain` and returned commit=None,
+    diff='' even though codex really had committed real work."""
+    real_run = ca.subprocess.run
+
+    def fake_run(cmd, **kw):
+        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
+        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
+            return real_run(cmd, **kw)
+        cwd = kw.get("cwd")
+        workdir = Path(cwd)
+        f = workdir / "f.txt"
+        f.write_text(f.read_text(encoding="utf-8") + line_holder[0] + "\n",
+                     encoding="utf-8")
+        # codex 0.136 self-commits → working tree clean afterwards.
+        _git(workdir, "add", "-A")
+        _git(workdir, "commit", "-m", "codex self-commit")
+        class _P:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        for i, tok in enumerate(cmd):
+            if tok == "-o":
+                Path(cmd[i + 1]).write_text("done", encoding="utf-8")
+        return _P()
+
+    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+
+def test_codex_self_commit_is_seen_as_progress(monkeypatch, tmp_path):
+    """Regression for the seed-02 round-2 empty-diff bug (2026-06-03).
+
+    When codex commits its own change, `git status --porcelain` is clean, yet
+    HEAD is ahead of origin/base. The adapter MUST report that commit + a
+    non-empty diff (origin/base...HEAD) — not commit=None / diff='' ('keine
+    Datei-Aenderung'). Otherwise the reviewer gets a leak-empty diff and the loop
+    spuriously stagnates."""
+    origin = _make_origin(tmp_path)
+    workroot = tmp_path / "work"
+    line = ["self-committed-line"]
+    _fake_codex_self_commits(monkeypatch, line)
+
+    r = ca.run_codex_task(auftrag="build", repo=origin, base_branch="main",
+                          task_id="sc1", workroot=workroot,
+                          branch="bridge/loop-SC", workdir_name="loop-SC")
+    assert r.status == "done", r.error_text
+    assert r.commit, "self-committed work reported as commit=None (Bug 2)"
+    assert r.diff and "self-committed-line" in r.diff, \
+        f"self-committed work produced an empty/short review diff (Bug 3): {r.diff!r}"
+
+    # The self-committed commit MUST be pushed to origin/<branch>, otherwise the
+    # next round's _git_clone_or_pull resets --hard to origin/<branch> and drops
+    # the local-only commit → continuity breaks (Codex review MAJOR 2026-06-03).
+    ls = _git(tmp_path, "ls-remote", "--heads", origin, "bridge/loop-SC")
+    assert r.commit in ls.stdout or ls.stdout.strip(), \
+        "self-committed branch was not pushed to origin (continuity risk)"
+    # Stronger: the pushed branch tip must carry the self-committed line.
+    probe = tmp_path / "probe"
+    subprocess.run(["git", "clone", "--branch", "bridge/loop-SC", origin, str(probe)],
+                   capture_output=True)
+    assert "self-committed-line" in (probe / "f.txt").read_text(encoding="utf-8"), \
+        "origin/bridge/loop-SC does not contain the self-committed work (not pushed)"
+
+
 def test_round2_builds_on_round1_commit(monkeypatch, tmp_path):
     """Two real codex builds on the SAME stable workdir + loop branch: round 2
     must start from round 1's commit (f.txt keeps round-1's line), not base."""

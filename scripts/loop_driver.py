@@ -23,6 +23,33 @@ import claude_adapter  # noqa: F401
 STATE_DIR = Path(__file__).resolve().parent / "state"
 
 
+def _reason_carries_signal(reason: str | None) -> bool:
+    """True only if a reject reason holds a real, differentiating signal.
+
+    Repeated-reason stagnation must NOT fire on no-signal reasons. Two cases:
+      - empty/whitespace: parse_verdict returns ('rejected', '') for every plain
+        reject, so '' == '' would spuriously stagnate after two real rounds.
+      - bare Markdown heading: parse_frontmatter keeps only the FIRST line of a
+        multi-line YAML payload, so a reviewer answer that opens with a
+        '## Begründung' heading collapses to that heading EVERY round (live
+        seed-02 false stagnation, 2026-06-03). A line that is only a heading
+        (starts with '#', no prose after the marker) carries no comparison value.
+    The same-commit guard already catches genuine no-progress, so dropping these
+    only removes a false positive, never a real stall."""
+    if not reason or not reason.strip():
+        return False
+    stripped = reason.strip()
+    # A pure ATX heading ('# ', '## ' … then a label) on a single line is
+    # boilerplate, not a differentiating reason. Require the '#'-run to be
+    # followed by a space so a real reason like '#123 test still failing' (no
+    # space after '#') still counts as signal (Codex review minor 2026-06-03).
+    if "\n" not in stripped:
+        marker = stripped[:len(stripped) - len(stripped.lstrip("#"))]
+        if marker and stripped[len(marker):len(marker) + 1] == " ":
+            return False
+    return True
+
+
 def parse_seed(seed_text: str) -> tuple[str, list[str]]:
     """Split a structured goal-loop seed into (goal, done_criteria).
 
@@ -369,9 +396,11 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
         if out["verdict"] == "accepted":
             accepted = True
             break
-        # rejected
+        # rejected — same no-signal guard as the goal-loop (empty reason / bare
+        # Markdown heading must not be read as a repeated differentiating reason).
         reason = out.get("verdict_reason")
-        if prev_reason is not None and reason == prev_reason:
+        if (_reason_carries_signal(reason) and _reason_carries_signal(prev_reason)
+                and reason == prev_reason):
             aborted, abort_reason = True, "stagniert (Reviewer wiederholt sich)"
             break
         prev_reason = reason
@@ -546,13 +575,14 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                       question="Der Bau kommt nicht voran. Seed schaerfen "
                                "(klarere Kriterien) + --resume.")
             break
-        # Repeated-reason stagnation only fires on a NON-empty repeated reason.
-        # In production parse_verdict returns ('rejected', '') for every reject,
-        # so '' == '' would otherwise spuriously escalate after two rejected
-        # rounds even while codex makes real, differentiated progress (the
-        # same-commit guard above already catches genuine no-progress). Empty
-        # reasons carry no signal — skip them.
-        if prev_reason and reason and reason == prev_reason:
+        # Repeated-reason stagnation only fires on a repeated reason that
+        # actually carries signal (see _reason_carries_signal): empty reasons and
+        # bare Markdown headings ('## Begründung') would otherwise spuriously
+        # escalate after two rejected rounds even while codex makes real,
+        # differentiated progress (the same-commit guard above already catches
+        # genuine no-progress).
+        if (_reason_carries_signal(reason) and _reason_carries_signal(prev_reason)
+                and reason == prev_reason):
             escalated = True
             escalation_trigger = "stagnation"
             _escalate(loop_id, "stagnation", round_no, loop_branch, commit,

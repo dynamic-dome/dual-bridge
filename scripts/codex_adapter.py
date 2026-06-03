@@ -234,6 +234,30 @@ def _git_status_porcelain(workdir: Path) -> list[str]:
     return [ln[3:].strip() for ln in cp.stdout.splitlines() if ln.strip()]
 
 
+def _commits_ahead_of_base(workdir: Path, base_branch: str) -> list[str]:
+    """Short hashes of commits on HEAD not yet on origin/base (newest first).
+
+    codex-cli 0.136 under -s danger-full-access may commit its OWN change, which
+    leaves the working tree clean — so `git status --porcelain` says "nothing
+    changed" while HEAD is genuinely ahead of origin/base. Detecting progress by
+    porcelain status alone then drops a real, committed build (seed-02 round-2
+    empty-diff bug, 2026-06-03). This counts the committed-but-unpushed work the
+    porcelain check is blind to. Empty list = HEAD really is at origin/base."""
+    cp = _run_git(workdir, "rev-list", f"origin/{base_branch}..HEAD")
+    if cp.returncode != 0:
+        return []
+    return [ln.strip()[:7] for ln in cp.stdout.splitlines() if ln.strip()]
+
+
+def _changed_files_vs_base(workdir: Path, base_branch: str) -> list[str]:
+    """Files changed between origin/base and HEAD (for a self-committed build,
+    where `git status --porcelain` is clean but commits carry the real change)."""
+    cp = _run_git(workdir, "diff", "--name-only", f"origin/{base_branch}...HEAD")
+    if cp.returncode != 0:
+        return []
+    return [ln.strip() for ln in cp.stdout.splitlines() if ln.strip()]
+
+
 def _git_commit_and_push(workdir: Path, branch: str, message: str) -> str:
     """Add+commit all changes and push the branch (force-with-lease). Returns
     the commit hash. Raises RuntimeError(stderr) on commit/push failure, but the
@@ -407,9 +431,33 @@ def run_codex_task(
         return CodexResult(status="error", error_text="codex: leere Antwort",
                            stderr_excerpt=_tail(proc.stderr))
 
-    # 6. did codex change files?
+    # 6. did codex change files? Two ways forward: an uncommitted working-tree
+    #    change (we commit it), OR codex already self-committed (0.136 under
+    #    danger-full-access) so the tree is clean but HEAD is ahead of base. Only
+    #    when BOTH are empty did codex truly produce no change.
     changed = _git_status_porcelain(workdir)
     if not changed:
+        ahead = _commits_ahead_of_base(workdir, base_branch)
+        if ahead:
+            # codex self-committed: surface its commit + diff as real progress
+            # instead of dropping it as "no change" (seed-02 round-2 bug). The
+            # commit is local-only — push it, or the next round's clone_or_pull
+            # resets --hard to origin/<branch> and drops it (continuity break,
+            # Codex review MAJOR 2026-06-03). On push failure keep the local hash
+            # but flag it, mirroring the normal commit+push path below.
+            diff = _git_diff(workdir, base_branch)
+            changed_files = _changed_files_vs_base(workdir, base_branch)
+            push = _run_git(workdir, "push", "--force-with-lease", "origin", branch)
+            if push.returncode != 0:
+                return CodexResult(status="error", antwort=antwort, branch=branch,
+                                   commit=ahead[0], changed_files=changed_files,
+                                   diff=diff,
+                                   error_text=f"push fehlgeschlagen (lokaler Commit "
+                                              f"{ahead[0]} auf B)",
+                                   stderr_excerpt=_tail(push.stderr))
+            return CodexResult(status="done", antwort=antwort, branch=branch,
+                               commit=ahead[0], changed_files=changed_files,
+                               diff=diff)
         return CodexResult(status="done", antwort=antwort, branch=None,
                            commit=None, changed_files=[],
                            note="codex gab nur Text, keine Datei-Aenderung")
