@@ -92,6 +92,21 @@ Größere Builds (vgl. L8, Seed 07 sprengte 600s):
 
 Deaktivieren: `Unregister-ScheduledTask -TaskName 'DualBridgeJobPoll' -Confirm:$false`
 
+> **Live-Output (--stream / DUAL_BRIDGE_STREAM)** — Nachtrag 2026-06-04.
+> Im stillen Daemon-Betrieb (Default) erscheint der loop_driver-Output erst NACH
+> Prozess-Ende; bei langen Builds sieht man auf B minutenlang nichts. Für eine
+> Diagnose-/Beobachtungs-Session (NICHT für den Scheduled Task) den Worker mit
+> Live-Stream starten:
+>
+> ```cmd
+> python job_poll.py --watch --interval 15 --stream
+> ```
+>
+> Alternativ persistent `setx DUAL_BRIDGE_STREAM 1`. stdout/stderr laufen dann
+> getrennt live über die Konsole; der result_payload (Tail) bleibt erhalten, der
+> Wall-Clock-Cap (round_timeout*max_rounds+120) gilt unverändert. Für den
+> Dauerbetrieb als Scheduled Task wieder weglassen (stiller Betrieb).
+
 ### Schritt 4 — Verifikation (Ground-Truth, nicht dem „registriert" trauen)
 
 ```powershell
@@ -105,6 +120,37 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 Ein laufender `python.exe … job_poll … --watch` = Builder live.
 
 ---
+
+## Job in die Queue legen — Format & Repo-Default (DCO-Seite)
+
+*Nachtrag 2026-06-04: Hybrid-Repo-Auswahl im DCO (Commit `1c5a35d`).*
+
+Der „ToDo in Queue"-Button routet ein bridge-getaggtes Todo in einen
+dual-bridge-Job. Damit der Builder auf B etwas zu tun bekommt, muss der Job ein
+Ziel-Repo haben. Dieses kommt — in dieser Priorität — aus:
+
+1. **Dropdown** im Queue-Dialog (Repo-Override pro Job),
+2. **`repo=` in Zeile 1** des Todo-Texts, oder
+3. **`BRIDGE_DEFAULT_REPO`** (DCO-`.env`, z.B. `https://github.com/dynamic-dome/ToDoDcO`).
+
+Ist keines davon gesetzt, antwortet der Endpoint mit **422** und es entsteht KEIN
+Job (häufige Stolperfalle: reiner Freitext OHNE gesetzten Default → nichts kommt
+bei B an). Mit gesetztem Default genügt reiner Freitext als Auftrag:
+
+```
+Implementiere Feature X laut Spec …            (Zeile 1 = Auftrag, Repo = Default)
+```
+
+Mit explizitem Repo (überschreibt den Default):
+
+```
+repo=https://github.com/dynamic-dome/dual-bridge kind=implement adapter=codex
+Implementiere Feature X laut Spec …
+```
+
+DCO-Endpunkte zur Kontrolle: `GET /api/bridge/repos` (Allowlist + Default),
+`GET /api/bridge/pending` (gepufferte Todos bei vollem Cap, `BRIDGE_MAX_ACTIVE`,
+Default 3).
 
 ## End-to-End-Smoke (beide Knoten zusammen)
 
