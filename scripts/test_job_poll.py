@@ -318,6 +318,26 @@ def test_tick_claims_runs_and_publishes():
     assert posts[0]["json"]["result_status"] is None
 
 
+def test_tick_emits_progress_log():
+    """tick gibt sichtbare Fortschritts-Meldungen aus (claim / build / result /
+    publish), damit man auf B live sieht, was passiert. log_fn ist injizierbar."""
+    _fresh()
+    _, bt, jp = _reload()
+    fake = _FakeHttpClient({
+        "/jobs/next": [(200, {"job_id": "jL",
+                              "input_text": "repo=https://x/y\nBaue X\nDone: X da"})],
+        "/jobs/jL/result": [(200, {"ok": True})],
+    })
+    source = _http_source(bt, fake)
+    logs: list[str] = []
+    jp.tick(source, run_fn=_Runner(exit_code=0), log_fn=logs.append)
+    blob = " | ".join(logs).lower()
+    assert "jl" in blob                    # Job-ID erscheint
+    assert "aufgenommen" in blob or "claim" in blob
+    assert "result" in blob or "rc" in blob or "fertig" in blob
+    assert any("repo" in m.lower() or "x/y" in m for m in logs)  # Repo sichtbar
+
+
 def test_tick_empty_queue_is_noop():
     _fresh()
     _, bt, jp = _reload()

@@ -193,10 +193,25 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
 
 # --- Ein Tick: claim -> process -> publish -----------------------------------
 
+def _default_log(msg: str) -> None:
+    """Default-Progress-Logger: Zeitstempel + Zeile auf stdout (sofort geflusht,
+    damit man auf B live mitliest)."""
+    from datetime import datetime
+    print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
+
+
+# rc -> menschenlesbares Outcome (nur für die Log-Ausgabe; der DCO mappt selbst).
+_RC_LABEL = {0: "accepted", 3: "escalated", 2: "config/resume-error", 1: "error"}
+
+
 def tick(source, run_fn=None, *, max_rounds: int = 4,
-         round_timeout: int = 600) -> int:
+         round_timeout: int = 600, log_fn=None) -> int:
     """Hole+arbeite EINEN Job ab. Return 1 wenn ein Job verarbeitet wurde, 0 wenn
     die Queue leer war.
+
+    log_fn(msg) (injizierbar, Default _default_log) gibt sichtbaren Fortschritt
+    aus: Job aufgenommen / Build startet / fertig mit rc / zurückgemeldet — damit
+    man auf B live sieht, was passiert.
 
     publish_result wird im finally GARANTIERT — HttpSource claimt serverseitig
     (queued->running); stirbt der Worker nach dem Claim ohne Result, bliebe der
@@ -204,19 +219,29 @@ def tick(source, run_fn=None, *, max_rounds: int = 4,
     DCO-Lease-Tick nach TTL). result_status=None: der DCO mappt rc selbst auf den
     finalen Status (_EXIT_MAP, Single Source of Truth). result_payload ist
     informativ (gekürztes stdout/stderr)."""
+    log = log_fn or _default_log
     item = source.claim_next()
     if item is None:
         return 0
+    parsed = parse_input_text(item.input_text)
+    repo = parsed.repo or "(kein repo!)"
+    log(f"Job aufgenommen: {item.job_id} — repo={repo} adapter={parsed.adapter}")
+    log(f"  Build startet (loop_driver, max_rounds={max_rounds}, "
+        f"round_timeout={round_timeout}s) — das kann dauern…")
     rc = 1
     payload: dict = {}
     try:
         rc = process_item(item, run_fn=run_fn, max_rounds=max_rounds,
                            round_timeout=round_timeout, out_payload=payload)
+        log(f"  Build fertig: rc={rc} ({_RC_LABEL.get(rc, '?')})")
     finally:
         try:
             source.publish_result(item, rc, result_payload=payload or None,
                                   result_status=None)
+            log(f"  Ergebnis an DCO zurückgemeldet (Job {item.job_id}, rc={rc}).")
         except Exception as exc:  # noqa: BLE001
+            log(f"  WARN: publish_result fehlgeschlagen für {item.job_id}: "
+                f"{type(exc).__name__}: {exc}")
             print(f"[job_poll] publish_result fehlgeschlagen für {item.job_id}: "
                   f"{type(exc).__name__}: {exc}", file=sys.stderr)
     return 1
@@ -251,13 +276,22 @@ def run_watch(source, *, run_fn=None, interval: int, max_rounds: int,
     tick_fn = tick_fn or tick
     import time
     sleep_fn = sleep_fn or time.sleep
+    _default_log(f"Worker läuft (--watch, alle {interval}s). Warte auf Jobs… (Ctrl-C beendet)")
+    idle = 0
     try:
         while True:
-            tick_fn(source, run_fn=run_fn, max_rounds=max_rounds,
-                    round_timeout=round_timeout)
+            n = tick_fn(source, run_fn=run_fn, max_rounds=max_rounds,
+                        round_timeout=round_timeout)
+            if n:
+                idle = 0
+            else:
+                idle += 1
+                # Lebenszeichen ca. alle ~5 Leerläufe, damit man sieht: lebt, Queue leer.
+                if idle % 5 == 1:
+                    _default_log(f"…Queue leer, poll weiter (Leerlauf {idle}).")
             sleep_fn(interval)
     except KeyboardInterrupt:
-        print("[job_poll] Shutdown (KeyboardInterrupt).", file=sys.stderr)
+        _default_log("Shutdown (Ctrl-C).")
         return 0
 
 
