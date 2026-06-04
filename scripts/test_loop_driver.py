@@ -223,9 +223,12 @@ def test_append_state_writes_jsonl(tmp_path, monkeypatch):
     assert "ts" in line  # Zeitstempel wird ergaenzt
 
 
-def _run_b_tick():
+def _run_b_tick(task_id=None):
     """Simuliert B: ein Poll-Durchlauf, verarbeitet offene A->B-Tasks.
-    Laeuft als B-Endpoint, danach Endpoint zurueck auf A."""
+    Laeuft als B-Endpoint, danach Endpoint zurueck auf A.
+
+    Nimmt task_id entgegen (Hook-Signatur seit loop_driver b_tick(task_id),
+    Upstream 3fc99ea) — hier ungenutzt, da der Tick alle offenen Tasks pollt."""
     import importlib, os
     try:
         os.environ["DUAL_BRIDGE_ENDPOINT"] = "codex@laptop-b"
@@ -267,7 +270,7 @@ def test_run_loop_aborts_on_timeout(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
     summary = loop_driver.run_loop(
         seed="0", max_rounds=3, adapter="increment",
-        round_timeout=2, interval=1, b_tick=lambda: None)
+        round_timeout=2, interval=1, b_tick=lambda task_id=None: None)
     assert summary["aborted"] is True
     assert summary["rounds_done"] == 0
     assert summary["open_task_id"]  # offener Task wird gemeldet
@@ -289,8 +292,9 @@ def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
     importlib.reload(loop_driver)
     monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
 
-    def _b_error_tick():
-        """B claimt den offenen A->B-Task und schreibt ein error-Result."""
+    def _b_error_tick(task_id=None):
+        """B claimt den offenen A->B-Task und schreibt ein error-Result.
+        task_id wird per Hook-Vertrag übergeben (loop_driver b_tick(task_id))."""
         send = bc.send_lane()
         for task in bc.lane_outbox(send).glob("task-*.md"):
             if ".claimed-" in task.name:
@@ -322,7 +326,7 @@ def test_run_loop_a_error_leaves_jsonl_trace(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
     summary = loop_driver.run_loop(
         seed="not-a-number", max_rounds=3, adapter="increment",
-        round_timeout=2, interval=1, b_tick=lambda: None)
+        round_timeout=2, interval=1, b_tick=lambda task_id=None: None)
     assert summary["aborted"] is True
     assert summary["rounds_done"] == 0
     jsonl = tmp_path / f"LOOP-{summary['loop_id']}.jsonl"
