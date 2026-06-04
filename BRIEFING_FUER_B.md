@@ -3,6 +3,50 @@
 > Geschrieben von Claude Code auf **Laptop A** am 2026-06-04 für den Agenten auf **Laptop B**.
 > A orchestriert den DCO (Job-Quelle), B ist der dual-bridge-Worker (Job-Verarbeiter).
 
+## ✅✅ GELÖST — vollständiger Durchstich bewiesen (2026-06-04)
+
+DCO-Job `b270878629ef` lief **end-to-end durch**: `completed`/`accepted`, `Runden: 1/4`,
+Datei `BRIDGE_E2E.txt` ("full loop ok") liegt am Remote-Branch `...091130@d0f2d07`,
+Quell-Todo `done`. **Die Bridge + der goal-loop funktionieren cross-device.**
+
+### Die KORREKTE Betriebs-Topologie (das war der letzte Stolperstein)
+
+Der goal-loop ist **zwei Knoten** — beide müssen laufen, mit **gegensätzlichen
+Endpoints** (die Endpoint-Namen sind Lane-Rollen, NICHT Maschinen):
+
+| Rolle | Prozess | `DUAL_BRIDGE_ENDPOINT` | Lane |
+|---|---|---|---|
+| **Builder** (zieht DCO-Jobs, codex baut) | `job_poll.py --watch` | `claude@laptop-a` | sendet Review-Task auf **A-to-B** |
+| **Reviewer** (reviewt den Build) | `handoff_poll.py --watch` | **`codex@laptop-b`** | empfängt **A-to-B** ← claimt den Review-Task |
+
+**Der Fehler vorher:** Beide Prozesse liefen als `claude@laptop-a`. Der Reviewer
+schaute dann in die B-to-A-Lane, aber der Review-Task lag in A-to-B → niemand
+claimte ihn → 300s-Timeout → `stagnation 0/4`. **Fix:** Reviewer mit dem
+GEGEN-Endpoint `codex@laptop-b` starten (empfängt A-to-B).
+
+Beide Prozesse teilen den Google-Drive `dynamic_sharepoint` (Default-Bridge-Root)
+und haben getrennte Singleton-Locks (kein Konflikt). Sie dürfen auf derselben
+Maschine laufen — die Endpoints trennen die Rollen, nicht die Hardware.
+
+### Start-Rezept (beide Prozesse)
+
+```powershell
+# Terminal 1 — Builder (zieht DCO-Jobs):
+cd C:\Users\domes\AI\dual-bridge\scripts
+$env:DUAL_BRIDGE_ENDPOINT="claude@laptop-a"
+python -X utf8 .\job_poll.py --watch --interval 10
+
+# Terminal 2 — Reviewer (reviewt die Builds):
+cd C:\Users\domes\AI\dual-bridge\scripts
+$env:DUAL_BRIDGE_ENDPOINT="codex@laptop-b"
+python -X utf8 .\handoff_poll.py --watch --interval 10
+```
+
+(Env für den Builder zusätzlich: `DUAL_BRIDGE_TRANSPORT=http`,
+`DCO_BRIDGE_URL=https://bot.dynamic-dome.com/api`, `DCO_BRIDGE_TOKEN=<Bridge-Token>`.)
+
+---
+
 ## 🔎 OFFENER PUNKT (2026-06-04, neuester Stand): codex-Stagnation in Runde 0
 
 Die **HTTP-Bridge funktioniert vollständig** — du hast 2× echte Builds gefahren
