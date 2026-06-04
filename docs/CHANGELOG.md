@@ -9,6 +9,18 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **HTTP-Worker-Poll-Loop (`scripts/job_poll.py`, 2026-06-04):** der fehlende
+  Daemon, der den DCO-Job-Pull tatsaechlich anschmeisst. Holt ueber
+  `bridge_transport.get_source()` (`DUAL_BRIDGE_TRANSPORT=http`) einen Job aus dem
+  DCO, arbeitet ihn ueber `loop_driver.py --mode goal-loop` ab (Run-Pfad identisch
+  zum Overnight-Scheduler) und meldet via `source.publish_result` zurueck.
+  `result_status=None` — der DCO `_EXIT_MAP` ist Single Source of Truth fuer
+  rc->Status. `parse_input_text` spiegelt den DCO-Parser `parse_seed_line` (fehlt
+  `repo=` -> rc 2 statt Wurf). Eigener Singleton-Lock (`dual-bridge-jobpoll.lock`),
+  fail-soft (run-Crash -> rc 1, `publish_result` im `finally` garantiert, kein
+  stranded Job). CLI: `--once | --watch [--interval N]`. 17 Tests (TDD), kein Netz/
+  Subprozess/Repo im Test (injizierter HTTP-Client + run_fn). Schliesst die
+  "Echte Verteilung"-Luecke unten. `handoff_poll.py` bleibt unberuehrt.
 - **Projekt-Skelett:** `AGENTS.md` als kurze Agenten-Laufzeitdatei und
   `docs/PROJECT.md` als Projektsteckbrief ergaenzt.
 
