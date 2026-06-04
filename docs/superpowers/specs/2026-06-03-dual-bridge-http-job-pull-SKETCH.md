@@ -239,3 +239,8 @@ Quell-Treiber wechselt von `file` auf `http`.
 → Nächster Schritt, **wenn** wir es angehen: diese Skizze zu einer echten
 Design-Spec im `specs/`-Stil verdichten (Endpoints fix, DB-Schema, Sicherheits-
 modell, Testliste), freigeben, dann TDD.
+
+**Update (2026-06-04):** Diese Skizze ist verdichtet in der echten Design-Spec
+`2026-06-04-dual-bridge-dco-job-pull-design.md` (Endpoints fix, `claim_next`-Code,
+Router, Lease/Recovery, Sicherheitsmodell, 11 Tests). Diese Datei bleibt als
+konzeptioneller Vorläufer/Begründung erhalten.

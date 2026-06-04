@@ -19,6 +19,25 @@ Commit-Hashes verweisen auf `main`.
   DCO-ready gekapselt; die zentrale Orchestrierung über die `todos.db` ist noch
   nicht verdrahtet.
 
+## 2026-06-04
+
+### Hinzugefügt
+- **Transport-Abstraktion** (`scripts/bridge_transport.py`): entkoppelt den Worker
+  von der Herkunft eines Jobs. `Source`-Vertrag mit `claim_next() -> WorkItem` und
+  `publish_result()`; zwei Implementierungen — `FileSource` (kapselt die heutige
+  Lane/Datei-Welt, Claim via `bc.claim_task`/`os.rename`) und `HttpSource`
+  (DCO-Job-Pull: `GET /jobs/next`, `POST /jobs/<id>/result`, Bearer-Token, injizier-
+  barer HTTP-Client → kein Netz im Test). Treiberwahl per `DUAL_BRIDGE_TRANSPORT`
+  (Default `file`), **fail-closed** (http ohne `DCO_BRIDGE_URL` wirft, unbekannter
+  Wert wirft). 10 neue Tests. Verdichtet die Design-Spec
+  `2026-06-04-dual-bridge-dco-job-pull-design.md`. **Additiv:** `handoff_poll` bleibt
+  unberührt; Verdrahtung folgt mit den DCO-Endpunkten.
+
+### Behoben
+- **`test_loop_driver.py`-Regression** aus `3fc99ea`: die `b_tick`-Hooks
+  (`_run_b_tick`, `_b_error_tick`, zwei Lambdas) nehmen jetzt `task_id` entgegen,
+  passend zum neuen `loop_driver`-Aufruf `b_tick(task_id)`. Reine Signatur-Angleichung.
+
 ## 2026-06-03
 
 ### Hinzugefügt
