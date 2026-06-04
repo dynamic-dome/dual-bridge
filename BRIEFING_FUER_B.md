@@ -3,7 +3,62 @@
 > Geschrieben von Claude Code auf **Laptop A** am 2026-06-04 für den Agenten auf **Laptop B**.
 > A orchestriert den DCO (Job-Quelle), B ist der dual-bridge-Worker (Job-Verarbeiter).
 
-## ✅ ROOT CAUSE GEFUNDEN + GEFIXT (2026-06-04, Update)
+## 🔎 OFFENER PUNKT (2026-06-04, neuester Stand): codex-Stagnation in Runde 0
+
+Die **HTTP-Bridge funktioniert vollständig** — du hast 2× echte Builds gefahren
+(764s / 771s), claim→build→rc→publish lief sauber, der DCO mappte rc 3 korrekt
+auf `waiting_approval`/`escalated`. **ABER:** beide trivialen Tasks (Datei anlegen)
+eskalierten mit `stagnation`, **Runden: 0/4** — codex schloss KEINE einzige Runde
+erfolgreich ab.
+
+Im Loop-Code (`loop_driver.py:591`) heißt `Runden: 0/4` + sofortige Stagnation:
+**`out["status"] != "done"` schon in Runde 0** — also der **codex-Runner selbst**
+gab kein erfolgreiches Build-Ergebnis zurück (NICHT „Reviewer rejected", NICHT
+„gleicher Commit"). Der genaue Grund steht im `abort_reason` der ESCALATION-Datei.
+
+### DIAGNOSE-AUFTRAG für B (bitte der Reihe nach)
+
+**1. ESCALATION-Datei lesen** (sie nennt den `abort_reason`):
+```powershell
+cd C:\Users\domes\AI\dual-bridge
+# Pfad steht im Job-payload: ESCALATION-loop-20260604-081941-459775-0-913e.md
+Get-ChildItem -Recurse -Filter "ESCALATION-loop-20260604-08*.md" | Select FullName
+# dann die neueste anzeigen:
+Get-Content (Get-ChildItem -Recurse -Filter "ESCALATION-loop-20260604-08*.md" | Sort LastWriteTime | Select -Last 1).FullName
+```
+→ Poste den `reason:`/`abort_reason`-Teil. DAS ist der Kern.
+
+**2. codex-Session-Log prüfen** (lief codex überhaupt, oder hing/crashte er?):
+```powershell
+# Neuestes codex-Rollout-Log:
+$log = Get-ChildItem "$env:USERPROFILE\.codex\sessions" -Recurse -Filter "rollout-*.jsonl" | Sort LastWriteTime | Select -Last 1
+$log.FullName
+Get-Content $log.FullName -Tail 30
+```
+→ Der LETZTE `function_call` OHNE zugehöriges `function_call_output` = Hängepunkt.
+   Bekannte Falle: **codex-0.136-exec-Hang** (CLAUDE.md §10.10) — `%TEMP%`-Sandbox +
+   ererbter SessionStart-Hook. Falls du Setup-Errors `WinError 5` / `%TEMP%`-Probing
+   siehst → das ist es.
+
+**3. Branch-Zustand prüfen** (hat codex committet/gepusht?):
+```powershell
+# Im throwaway-Workdir des Loops (state/work/loop-...):
+Get-ChildItem -Recurse -Directory -Filter "loop-20260604-08*" scripts\state\work 2>$null | Select -Last 1
+# Dann darin: git log --oneline -5  und  git status
+# ODER direkt am Remote schauen, ob ein loop-Branch mit Commit existiert:
+git ls-remote https://github.com/dynamic-dome/test-repo "refs/heads/*loop*"
+```
+→ Wenn KEIN loop-Branch / kein Commit am Remote: codex hat nichts gebaut
+   (Adapter-/codex-Problem). Wenn ein Commit DA ist, aber der Loop ihn nicht sah:
+   Loop-Erkennungs-Bug (`_commits_ahead_of_base`, bekanntes Thema).
+
+**Melde A:** (1) den ESCALATION-`reason`, (2) ob codex im rollout-Log normal endete
+oder hing, (3) ob am Remote/Workdir ein loop-Commit existiert. Damit ist
+„codex baut nichts" vs. „Loop erkennt Build nicht" eindeutig getrennt.
+
+---
+
+## ✅ ROOT CAUSE (Seed-Format) GEFUNDEN + GEFIXT (2026-06-04)
 
 Der ~5s-Fail war **NICHT** codex-PATH (alte Hypothese unten, jetzt zweitrangig).
 Die echte Ursache, live über den DCO-`result_payload` gefunden:
