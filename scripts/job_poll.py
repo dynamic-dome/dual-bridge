@@ -80,6 +80,48 @@ def parse_input_text(text: str) -> ParsedJob:
     )
 
 
+# --- Seed-Strukturierung (loop_driver verlangt ## Ziel + ## Done-Kriterien) ---
+
+def ensure_seed_structure(seed: str) -> str:
+    """Bringe einen rohen Seed ins goal-loop-Format, falls noch nicht geschehen.
+
+    loop_driver.parse_seed verlangt einen '## Ziel'-Block UND mindestens einen
+    '- '-Listenpunkt unter '## Done-Kriterien' — sonst rc 2 ('seed has no ...').
+    Der DCO-Job-Text ist aber freier Fließtext. Dieser Wrapper macht ihn lauffähig:
+
+    - Enthält der Seed beide Blöcke schon -> unverändert durchreichen (bewusst
+      strukturierter Seed).
+    - Sonst: alle 'Done:'/'Done-Kriterium:'-Zeilen werden Done-Kriterien, der Rest
+      wird das Ziel. Fehlt ein Done-Kriterium ganz, ein generisches Fallback, damit
+      parse_seed nicht an leeren Kriterien scheitert.
+    """
+    low = seed.lower()
+    if "## ziel" in low and "## done-kriterien" in low:
+        return seed
+
+    goal_lines: list[str] = []
+    criteria: list[str] = []
+    for raw in seed.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        low_line = line.lower()
+        if low_line.startswith("done:") or low_line.startswith("done-kriterium:") \
+                or low_line.startswith("done-kriterien:"):
+            crit = line.split(":", 1)[1].strip()
+            if crit:
+                criteria.append(crit)
+        else:
+            goal_lines.append(line)
+
+    goal = " ".join(goal_lines).strip() or "Arbeite den Auftrag ab."
+    if not criteria:
+        criteria = ["Der Auftrag ist vollständig umgesetzt und die Tests sind grün."]
+
+    crit_block = "\n".join(f"- {c}" for c in criteria)
+    return f"## Ziel\n{goal}\n\n## Done-Kriterien\n{crit_block}\n"
+
+
 # --- Run-Pfad (Default: loop_driver --mode goal-loop, wie bridge_overnight) ---
 
 def _real_run_fn(*, repo: str, seed: str, adapter: str,
@@ -131,7 +173,8 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
             out_payload["error"] = "config: seed ohne repo= (rc 2)"
         return 2
     try:
-        out = run_fn(repo=parsed.repo, seed=parsed.seed, adapter=parsed.adapter,
+        seed = ensure_seed_structure(parsed.seed)
+        out = run_fn(repo=parsed.repo, seed=seed, adapter=parsed.adapter,
                      max_rounds=max_rounds, round_timeout=round_timeout)
         if out_payload is not None and isinstance(out, dict):
             # Nur die informativen Felder durchreichen (kein exit-Code im payload).

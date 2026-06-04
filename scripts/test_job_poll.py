@@ -108,6 +108,65 @@ def test_parse_garbage_tokens_in_header_ignored():
 
 
 # ---------------------------------------------------------------------------
+# (1b) ensure_seed_structure — rohen Seed ins loop_driver-Format wrappen
+# (loop_driver.parse_seed verlangt '## Ziel' + '## Done-Kriterien', sonst rc 2).
+# Live-Bug 2026-06-04: roher Job-Seed -> "seed has no '## Ziel' block".
+# ---------------------------------------------------------------------------
+
+def _has_blocks(seed: str) -> bool:
+    low = seed.lower()
+    return "## ziel" in low and "## done-kriterien" in low
+
+
+def test_ensure_seed_wraps_raw_text():
+    _fresh()
+    _, _, jp = _reload()
+    out = jp.ensure_seed_structure("Lege Datei X an\nDone: X existiert")
+    assert _has_blocks(out)
+    assert "Lege Datei X an" in out
+    # Done-Kriterium aus der Done:-Zeile übernommen
+    assert "X existiert" in out
+
+
+def test_ensure_seed_passes_structured_seed_through():
+    """Ein bereits strukturierter Seed bleibt unverändert."""
+    _fresh()
+    _, _, jp = _reload()
+    structured = "## Ziel\nBaue Y\n\n## Done-Kriterien\n- Y ist da"
+    assert jp.ensure_seed_structure(structured) == structured
+
+
+def test_ensure_seed_adds_fallback_criterion_when_no_done():
+    """Ohne erkennbares Done-Kriterium -> generisches Fallback, damit
+    loop_driver.parse_seed nicht an leeren Kriterien scheitert."""
+    _fresh()
+    _, _, jp = _reload()
+    out = jp.ensure_seed_structure("Tu irgendwas Sinnvolles")
+    assert _has_blocks(out)
+    # mindestens ein Listenpunkt unter Done-Kriterien
+    assert "\n- " in out
+
+
+def test_ensure_seed_empty_still_has_blocks():
+    _fresh()
+    _, _, jp = _reload()
+    out = jp.ensure_seed_structure("")
+    assert _has_blocks(out)
+    assert "\n- " in out
+
+
+def test_process_item_wraps_seed_before_run_fn():
+    """process_item übergibt run_fn einen strukturierten Seed (mit ## Ziel)."""
+    _fresh()
+    _, bt, jp = _reload()
+    item = _work_item(bt, "jw", "repo=https://x/y\nBaue Z\nDone: Z da")
+    runner = _Runner(exit_code=0)
+    jp.process_item(item, run_fn=runner, max_rounds=1, round_timeout=60)
+    seed = runner.calls[0]["seed"]
+    assert "## Ziel" in seed and "## Done-Kriterien" in seed
+
+
+# ---------------------------------------------------------------------------
 # Injizierbare Fakes (kein Netz, kein Subprozess, kein Repo)
 # ---------------------------------------------------------------------------
 
