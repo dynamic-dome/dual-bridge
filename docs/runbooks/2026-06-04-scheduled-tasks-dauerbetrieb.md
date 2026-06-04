@@ -16,13 +16,23 @@ Beide als `--watch --interval 15`, je ein Scheduled Task mit 10-min-Re-Trigger
 
 ---
 
-## A (dieser Rechner) — ERLEDIGT
+## A (Reviewer) — auf Laptop A registrieren
 
-Reviewer-Watchdog ist **live registriert + laufend** bestätigt:
+Reviewer-Watchdog muss mit explizitem Endpoint laufen, sonst defaultet
+`handoff_poll.py` auf `claude@laptop-a` und liest die falsche Lane. Der
+Reviewer fuer DCO-Job-Pull-Auftraege ist in dieser Topologie
+`codex@laptop-b`, auch wenn der Prozess auf Laptop A laeuft.
+
+```powershell
+cd C:\Users\domes\AI\dual-bridge\scripts
+powershell -ExecutionPolicy Bypass -File .\register_watchdog.ps1 -Endpoint codex@laptop-b -Interval 15
+```
+
+Erwartung:
 
 ```
-Task   : DualBridgePollerWatchdog  (State Ready, Prozess läuft)
-Argument: handoff_poll.py --watch --interval 15
+Task   : DualBridgePollerWatchdog
+Argument: powershell ... $env:DUAL_BRIDGE_ENDPOINT='codex@laptop-b'; python -X utf8 handoff_poll.py --watch --interval 15
 ```
 
 Der Reviewer liest die Drive-Datei-Bridge — **keine** HTTP-/TG-Env nötig.
@@ -36,6 +46,11 @@ Deaktivieren: `Unregister-ScheduledTask -TaskName 'DualBridgePollerWatchdog' -Co
 > `%TEMP%\dual-bridge-poller.lock` (+ `%TEMP%\claude\…`). Tritt das wieder auf:
 > Lock-Datei löschen, der frische Start schreibt seine lebende PID rein.
 
+> Live-Fund 2026-06-04: Ein laufender Watchdog ohne explizites
+> `DUAL_BRIDGE_ENDPOINT` liess Review-Tasks offen liegen. Ein manueller Pass mit
+> `$env:DUAL_BRIDGE_ENDPOINT='codex@laptop-b'` verarbeitete den Task sofort; der
+> DCO-Job `5b26c02c35e0` wurde danach `completed/accepted`.
+
 ---
 
 ## B (Builder) — vom User auszuführen
@@ -48,9 +63,10 @@ Variablen pollt `job_poll` still die Datei-Bridge statt den DCO** (Default
 `DUAL_BRIDGE_TRANSPORT=file`).
 
 ```cmd
-setx DUAL_BRIDGE_TRANSPORT http
+setx DUAL_BRIDGE_TRANSPORT "http"
 setx DCO_BRIDGE_URL  "https://bot.dynamic-dome.com/api"
 setx DCO_BRIDGE_TOKEN "<BRIDGE_API_TOKEN aus der DCO-.env, Zeile 32>"
+setx DUAL_BRIDGE_WORKER_TYPE "dual-bridge"
 ```
 
 - `DCO_BRIDGE_URL` **muss auf `/api` enden**, sonst 404 (Runbook
@@ -65,8 +81,8 @@ setx DCO_BRIDGE_TOKEN "<BRIDGE_API_TOKEN aus der DCO-.env, Zeile 32>"
 ### Schritt 2 — Trockenlauf (ein Tick, kein Dauerlauf)
 
 ```cmd
-cd C:\…\dual-bridge\scripts
-python job_poll.py --once
+cd C:\Users\domes\AI\dual-bridge\scripts
+python -X utf8 .\job_poll.py --once
 ```
 
 Erwartung: claimt einen offenen Job oder meldet „0 Jobs"; **kein** Config-Fehler
@@ -76,7 +92,7 @@ nicht in dieser Shell sichtbar (neue Shell öffnen).
 ### Schritt 3 — Builder als Scheduled Task registrieren
 
 ```cmd
-powershell -ExecutionPolicy Bypass -File register_jobpoll.ps1 -Interval 15
+powershell -ExecutionPolicy Bypass -File .\register_jobpoll.ps1 -Interval 15 -MaxRounds 4 -RoundTimeout 600
 ```
 
 Das Skript prüft die drei Env-Variablen **vor** der Registrierung und bricht

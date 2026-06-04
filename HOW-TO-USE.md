@@ -72,8 +72,10 @@ Auf Laptop B vorher Endpoint setzen:
 - ✅ **Overnight-Scheduler** `bridge_overnight.py`: arbeitet `docs/overnight/*.md`
   nachts als goal-loop ab, Morgen-Digest per Telegram (read-mostly, fail-soft,
   DCO-ready). + 181 Tests grün.
-- ⬜ **Später:** echte Verteilung (HTTP-Job-Pull, gleicher Claim-Mechanismus);
-  optional DCO als alternativer Notifier-/Scheduler-Trigger.
+- ✅ **HTTP-Job-Pull fuer DCO** `scripts/job_poll.py`: pollt
+  `GET /api/jobs/next`, verarbeitet den Job im goal-loop und meldet per
+  `POST /api/jobs/<id>/result` zurueck. Auf Laptop B aus
+  `C:\Users\domes\AI\dual-bridge\scripts` starten.
 
 ## Wichtigste Env-Vars
 
@@ -84,5 +86,9 @@ Auf Laptop B vorher Endpoint setzen:
 | `DUAL_BRIDGE_WORKROOT` | Arbeitsverzeichnis für codex/claude-Runner | `~/dual-bridge-work` |
 | `DUAL_BRIDGE_REPO_ALLOWLIST` | codex-Repo-Allowlist (fnmatch, Komma-getrennt) | leer = alle |
 | `TELEGRAM_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram-Credentials für `bridge_notify.py` (mit DCO geteilt; `DUAL_BRIDGE_TG_TOKEN`/`DUAL_BRIDGE_TG_CHAT` als Override) | — |
+| `DUAL_BRIDGE_TRANSPORT` | Job-Quelle: fuer DCO-Queue auf `http` setzen | `file` |
+| `DCO_BRIDGE_URL` | DCO-API-Basis-URL, muss auf `/api` enden | — |
+| `DCO_BRIDGE_TOKEN` | Bearer-Token, identisch zu DCO `BRIDGE_API_TOKEN` | — |
+| `DUAL_BRIDGE_WORKER_TYPE` | Worker-Typ fuer DCO-Jobs | `dual-bridge` |
 
 Vollständige Env-Var-Tabelle: [README → Konfiguration](README.md#konfiguration-env-vars).

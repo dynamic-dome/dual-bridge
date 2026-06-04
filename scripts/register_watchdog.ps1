@@ -1,5 +1,5 @@
 <#
-  register_watchdog.ps1 - Dual-Bridge Poller-Watchdog (Laptop B, OPTIONAL).
+  register_watchdog.ps1 - Dual-Bridge Reviewer-Watchdog.
 
   Registriert einen Scheduled Task, der den Reviewer-Poller im --watch-Modus
   haelt (handoff_poll.py --watch --interval N). Der Task startet einmal beim
@@ -17,16 +17,20 @@
 
   Erst NACH dem ersten erfolgreichen manuellen Roundtrip aktivieren.
 
-  Aktivieren (Default --interval 15s):
+  Aktivieren (Default --interval 15s, Reviewer-Endpoint codex@laptop-b):
       powershell -ExecutionPolicy Bypass -File register_watchdog.ps1
   Anderes Poll-Intervall (Sekunden) / anderer Re-Trigger-Takt (Minuten):
       powershell -ExecutionPolicy Bypass -File register_watchdog.ps1 -Interval 30 -IntervalMinutes 5
+  Anderer Endpoint:
+      powershell -ExecutionPolicy Bypass -File register_watchdog.ps1 -Endpoint claude@laptop-a
   Deaktivieren:  Unregister-ScheduledTask -TaskName "DualBridgePollerWatchdog" -Confirm:$false
 #>
 param(
     [string]$ScriptsDir = $PSScriptRoot,
     [int]$IntervalMinutes = 10,
-    [int]$Interval = 15
+    [int]$Interval = 15,
+    [ValidateSet("claude@laptop-a", "codex@laptop-b")]
+    [string]$Endpoint = "codex@laptop-b"
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,8 +42,15 @@ if (-not (Test-Path $poller)) {
     exit 1
 }
 
-$action = New-ScheduledTaskAction -Execute $python `
-    -Argument "`"$poller`" --watch --interval $Interval" -WorkingDirectory $ScriptsDir
+$powershell = (Get-Command powershell).Source
+$runner = @(
+    "`$env:DUAL_BRIDGE_ENDPOINT='$Endpoint'",
+    "& '$python' -X utf8 '$poller' --watch --interval $Interval"
+) -join "; "
+
+$action = New-ScheduledTaskAction -Execute $powershell `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -Command `"$runner`"" `
+    -WorkingDirectory $ScriptsDir
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
@@ -52,5 +63,5 @@ Register-ScheduledTask -TaskName "DualBridgePollerWatchdog" `
     -Description "Startet den Dual-Bridge-Poller alle $IntervalMinutes min (Self-Guard verhindert Doppelstart)." `
     -Force
 
-Write-Host "Watchdog registriert: DualBridgePollerWatchdog (Re-Trigger alle $IntervalMinutes min, Poll alle ${Interval}s)."
+Write-Host "Watchdog registriert: DualBridgePollerWatchdog (Endpoint $Endpoint, Re-Trigger alle $IntervalMinutes min, Poll alle ${Interval}s)."
 Write-Host "Deaktivieren: Unregister-ScheduledTask -TaskName 'DualBridgePollerWatchdog' -Confirm:`$false"

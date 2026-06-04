@@ -114,8 +114,9 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | `DUAL_BRIDGE_TG_TOKEN` | Override für `TELEGRAM_TOKEN` (nur dual-bridge) | leer = `TELEGRAM_TOKEN` |
 | `DUAL_BRIDGE_TG_CHAT` | Override für `TELEGRAM_CHAT_ID` (nur dual-bridge) | leer = `TELEGRAM_CHAT_ID` |
 | `DUAL_BRIDGE_TRANSPORT` | Job-Quelle: `file` (Lane/Drive) oder `http` (DCO-Job-Pull) | `file` |
-| `DCO_BRIDGE_URL` | Basis-URL des DCO-HTTP-API (nur bei `http`; fail-closed wenn leer) | — |
+| `DCO_BRIDGE_URL` | Basis-URL des DCO-HTTP-API (nur bei `http`; muss auf `/api` enden; fail-closed wenn leer) | — |
 | `DCO_BRIDGE_TOKEN` | Bearer-Token des Workers für den DCO-Job-Pull | — |
+| `DUAL_BRIDGE_WORKER_TYPE` | Worker-Typ im DCO-Job-Pull | `dual-bridge` |
 
 Endpoint-Werte: `claude@laptop-a` (sendet A→B, empfängt B→A) oder
 `codex@laptop-b` (sendet B→A, empfängt A→B).
@@ -196,19 +197,23 @@ claimed_at:
   injizierbare `run_fn`).
 - ✅ **Optionaler Poller-Filesystem-Wakeup** (`watchdog` wenn installiert,
   Intervall-Poll als Fallback).
+- ✅ **DCO-HTTP-Job-Pull** (`scripts/job_poll.py`): `DUAL_BRIDGE_TRANSPORT=http`
+  claimt Jobs aus DCO (`GET /api/jobs/next?worker_type=dual-bridge`) und meldet
+  Resultate zurueck (`POST /api/jobs/<id>/result`). Auf Laptop B aus
+  `C:\Users\domes\AI\dual-bridge\scripts` starten, z.B.
+  `python -X utf8 .\job_poll.py --once`.
 - ✅ **181 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
-> Der **freie Goal-Loop** (oben) ist gebaut+live. „Echte Verteilung / HTTP-Job-Pull"
-> (ursprünglicher Stufe-3-Wortlaut) bleibt ein späterer Scope.
+> Der **freie Goal-Loop** und der DCO-HTTP-Job-Pull sind gebaut. Fuer produktive
+> Ende-zu-Ende-Verarbeitung muessen weiterhin zwei Prozesse laufen: Builder
+> (`job_poll.py`) und Reviewer (`handoff_poll.py`).
 
 ## Nächste Schritte
 
-1. **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
-   mit demselben Claim-Mechanismus.
-2. **DCO-Anbindung (späterer Scope):** Notifier und Overnight-Scheduler sind
-   DCO-ready gekapselt (`notify_new_escalations()` / `run_overnight()` mit
-   injizierbarem Caller) — die zentrale Orchestrierung über die `todos.db` ist noch
-   nicht verdrahtet.
+1. **Laptop-B-Dauerbetrieb verifizieren:** `job_poll.py --once` gegen DCO laufen
+   lassen, danach `register_jobpoll.ps1` fuer den Builder-Dauerlauf registrieren.
+2. **Notifier/Overnight spaeter zentral triggern:** `notify_new_escalations()` und
+   `run_overnight()` sind DCO-ready gekapselt, aber nicht Teil des Job-Pull-Pfads.
 
 Vollständiger Änderungsverlauf: [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
