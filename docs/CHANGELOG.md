@@ -9,6 +9,16 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Behoben
+- **Reviewer-Watchdog Default-Endpoint korrigiert (`scripts/register_watchdog.ps1`,
+  2026-06-04, live gefunden):** Der Default-Endpoint war faelschlich
+  `codex@laptop-b`. Der Reviewer-Knoten laeuft aber auf Laptop A und muss aus der
+  Lane `B-to-A` lesen, wo der Builder (B) seine `kind:review`-Tasks ablegt. Mit dem
+  falschen Default pollte der Reviewer die Lane `A-to-B`: B's Review-Tasks blieben
+  liegen, und ein zweiter (B-seitiger) Poller mit gleichem Endpoint kollidierte um
+  dieselben Tasks (sichtbar als wechselseitige `P0-Recovery: ... requeued (open)`
+  und `Result ... existiert bereits - anderer Claim gewann`). Fix: Default auf
+  `claude@laptop-a`; `-Endpoint codex@laptop-b` bleibt als dokumentierter Sonderfall
+  (Reviewer auf B) erhalten. Reine Default-/Doku-Korrektur, kein Logikpfad geaendert.
 - **HttpSource-Client gegen Cloudflare + nicht-JSON-Antworten gehaertet
   (`bridge_transport.py`, 2026-06-04, live gefunden):** Der B-Worker crashte beim
   ersten echten Tunnel-Poll mit `JSONDecodeError`. Zwei Ursachen: (1) Cloudflare

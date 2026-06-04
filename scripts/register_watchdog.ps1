@@ -17,20 +17,24 @@
 
   Erst NACH dem ersten erfolgreichen manuellen Roundtrip aktivieren.
 
-  Aktivieren (Default --interval 15s, Reviewer-Endpoint codex@laptop-b):
+  Aktivieren (Default --interval 15s, Reviewer-Endpoint claude@laptop-a):
       powershell -ExecutionPolicy Bypass -File register_watchdog.ps1
   Anderes Poll-Intervall (Sekunden) / anderer Re-Trigger-Takt (Minuten):
       powershell -ExecutionPolicy Bypass -File register_watchdog.ps1 -Interval 30 -IntervalMinutes 5
-  Anderer Endpoint:
-      powershell -ExecutionPolicy Bypass -File register_watchdog.ps1 -Endpoint claude@laptop-a
+  Anderer Endpoint (Sonderfall: Reviewer laeuft auf B statt A):
+      powershell -ExecutionPolicy Bypass -File register_watchdog.ps1 -Endpoint codex@laptop-b
   Deaktivieren:  Unregister-ScheduledTask -TaskName "DualBridgePollerWatchdog" -Confirm:$false
 #>
 param(
     [string]$ScriptsDir = $PSScriptRoot,
     [int]$IntervalMinutes = 10,
     [int]$Interval = 15,
+    # Reviewer laeuft per Default auf Laptop A (Endpoint claude@laptop-a) und
+    # liest aus der Lane B-to-A, wo der Builder (B) seine Review-Tasks ablegt.
+    # Ein falscher Default (codex@laptop-b) liesse den Reviewer die Lane A-to-B
+    # pollen -> B's Review-Tasks blieben liegen und zwei Poller kollidieren.
     [ValidateSet("claude@laptop-a", "codex@laptop-b")]
-    [string]$Endpoint = "codex@laptop-b"
+    [string]$Endpoint = "claude@laptop-a"
 )
 
 $ErrorActionPreference = "Stop"
