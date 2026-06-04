@@ -503,6 +503,174 @@ def test_main_aborts_when_jobpoll_lock_already_held():
 
 
 # ---------------------------------------------------------------------------
+# (6) Live-Build-Output: _real_run_fn mit stream=True (Popen + Tee), Default
+#     stream=False bleibt der unveraenderte subprocess.run-Pfad. Flag/Env in main.
+# ---------------------------------------------------------------------------
+
+import io                       # noqa: E402
+import contextlib               # noqa: E402
+
+
+class _FakeCompleted:
+    """Ergebnis-Stub fuer subprocess.run (stream=False-Pfad)."""
+    def __init__(self, returncode, stdout, stderr):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class _FakePopen:
+    """Minimaler Popen-Stub: liefert vorgegebene stdout/stderr-Zeilen, einen
+    returncode und protokolliert kill(). wait(timeout) kann TimeoutExpired werfen."""
+    def __init__(self, out_lines, err_lines, returncode=0, raise_timeout=False):
+        self.stdout = io.StringIO("".join(out_lines))
+        self.stderr = io.StringIO("".join(err_lines))
+        self.returncode = returncode
+        self._raise_timeout = raise_timeout
+        self.killed = False
+        self.pid = 4242
+
+    def wait(self, timeout=None):
+        if self._raise_timeout:
+            import subprocess as _sp
+            raise _sp.TimeoutExpired(cmd="loop_driver", timeout=timeout)
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+
+    def poll(self):
+        return self.returncode
+
+
+def test_real_run_fn_stream_false_nutzt_subprocess_run():
+    """Default (stream=False): unveraenderter Pfad ueber subprocess.run mit
+    capture_output. Kein Popen, gleicher {'exit', stdout, stderr}-Vertrag."""
+    _fresh()
+    _, _, jp = _reload()
+    calls = {}
+
+    def fake_run(cmd, **kw):
+        calls["cmd"] = cmd
+        calls["kw"] = kw
+        return _FakeCompleted(0, "voller stdout", "voller stderr")
+
+    orig = jp.subprocess.run
+    jp.subprocess.run = fake_run
+    try:
+        out = jp._real_run_fn(repo="https://x/y", seed="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                              adapter="codex", max_rounds=2, round_timeout=30)
+    finally:
+        jp.subprocess.run = orig
+    assert calls["kw"].get("capture_output") is True   # alter Pfad
+    assert out["exit"] == 0
+    assert out["stdout"] == "voller stdout"
+    assert out["stderr"] == "voller stderr"
+
+
+def test_real_run_fn_stream_true_echoed_und_puffert_getrennt():
+    """stream=True: Popen-Pfad. stdout/stderr werden LIVE auf die Konsole geechoot
+    UND getrennt im Rueckgabe-Payload gepuffert (result_payload bleibt erhalten)."""
+    _fresh()
+    _, _, jp = _reload()
+    fake = _FakePopen(
+        out_lines=["baue modul A\n", "runde 1 fertig\n"],
+        err_lines=["warnung: foo\n"],
+        returncode=0,
+    )
+    orig = jp.subprocess.Popen
+    jp.subprocess.Popen = lambda *a, **k: fake
+    buf_out, buf_err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf_out), contextlib.redirect_stderr(buf_err):
+            out = jp._real_run_fn(repo="https://x/y", seed="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                                  adapter="codex", max_rounds=2, round_timeout=30,
+                                  stream=True)
+    finally:
+        jp.subprocess.Popen = orig
+    echoed = buf_out.getvalue() + buf_err.getvalue()
+    assert "baue modul A" in echoed and "runde 1 fertig" in echoed   # live stdout
+    assert "warnung: foo" in echoed                                  # live stderr
+    assert out["exit"] == 0
+    assert "baue modul A" in out["stdout"] and "runde 1 fertig" in out["stdout"]
+    assert "warnung: foo" in out["stderr"]                           # getrennt gepuffert
+    assert "warnung: foo" not in out["stdout"]                       # NICHT vermischt
+
+
+def test_real_run_fn_stream_true_timeout_killt_und_wirft():
+    """stream=True + Wall-Clock-Cap ueberschritten: Prozess wird gekillt und die
+    TimeoutExpired propagiert (process_item kapselt sie spaeter zu rc 1)."""
+    _fresh()
+    _, _, jp = _reload()
+    fake = _FakePopen(out_lines=["laeuft…\n"], err_lines=[], raise_timeout=True)
+    orig = jp.subprocess.Popen
+    jp.subprocess.Popen = lambda *a, **k: fake
+    import subprocess as _sp
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            raised = False
+            try:
+                jp._real_run_fn(repo="https://x/y", seed="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                                adapter="codex", max_rounds=1, round_timeout=1, stream=True)
+            except _sp.TimeoutExpired:
+                raised = True
+    finally:
+        jp.subprocess.Popen = orig
+    assert raised is True
+    assert fake.killed is True            # Prozess wurde beendet
+
+
+def test_main_stream_flag_reicht_stream_durch():
+    """--stream setzt stream=True durch die ganze Kette bis run_fn."""
+    _fresh()
+    _, bt, jp = _reload()
+    seen = {}
+
+    def spy_run_fn(*, repo, seed, adapter, max_rounds, round_timeout, stream=False):
+        seen["stream"] = stream
+        return {"exit": 0}
+
+    src = _http_source(bt, _FakeHttpClient({
+        "/jobs/next": [(200, {"job_id": "j1", "input_text": "repo=https://x/y\nZiel"})],
+        "/jobs/j1/result": [(200, {})],
+    }))
+
+    def tick_fn(source, *, run_fn=None, max_rounds, round_timeout, **kw):
+        # main reicht stream weiter -> tick muss es an process_item/run_fn geben.
+        return jp.tick(source, run_fn=spy_run_fn, max_rounds=max_rounds,
+                       round_timeout=round_timeout, stream=kw.get("stream", False))
+
+    jp.main(["--once", "--stream"], tick_fn=tick_fn, source_override=src)
+    assert seen.get("stream") is True
+
+
+def test_main_stream_env_reicht_stream_durch():
+    """DUAL_BRIDGE_STREAM=1 setzt stream=True (auch ohne --stream-Flag)."""
+    _fresh()
+    os.environ["DUAL_BRIDGE_STREAM"] = "1"
+    _, bt, jp = _reload()
+    seen = {}
+
+    def spy_run_fn(*, repo, seed, adapter, max_rounds, round_timeout, stream=False):
+        seen["stream"] = stream
+        return {"exit": 0}
+
+    src = _http_source(bt, _FakeHttpClient({
+        "/jobs/next": [(200, {"job_id": "j1", "input_text": "repo=https://x/y\nZiel"})],
+        "/jobs/j1/result": [(200, {})],
+    }))
+
+    def tick_fn(source, *, run_fn=None, max_rounds, round_timeout, **kw):
+        return jp.tick(source, run_fn=spy_run_fn, max_rounds=max_rounds,
+                       round_timeout=round_timeout, stream=kw.get("stream", False))
+    try:
+        jp.main(["--once"], tick_fn=tick_fn, source_override=src)
+    finally:
+        os.environ.pop("DUAL_BRIDGE_STREAM", None)
+    assert seen.get("stream") is True
+
+
+# ---------------------------------------------------------------------------
 # Dual-runnable Footer
 # ---------------------------------------------------------------------------
 

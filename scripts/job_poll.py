@@ -124,15 +124,42 @@ def ensure_seed_structure(seed: str) -> str:
 
 # --- Run-Pfad (Default: loop_driver --mode goal-loop, wie bridge_overnight) ---
 
+def _stream_reader(pipe, echo_stream, sink: list) -> None:
+    """Liest einen Subprozess-Stream zeilenweise, echoot LIVE auf echo_stream und
+    sammelt die Zeilen in sink (für den späteren result_payload-Tail). Läuft je
+    Stream in einem eigenen Thread -> vermeidet den klassischen PIPE-Deadlock,
+    wenn ein Stream den OS-Puffer füllt, während wir am anderen lesen."""
+    try:
+        for line in iter(pipe.readline, ""):
+            if not line:
+                break
+            sink.append(line)
+            echo_stream.write(line)
+            echo_stream.flush()
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+
+
 def _real_run_fn(*, repo: str, seed: str, adapter: str,
-                 max_rounds: int, round_timeout: int) -> dict:
+                 max_rounds: int, round_timeout: int, stream: bool = False) -> dict:
     """Default-Runner: ruft loop_driver.py --mode goal-loop als Subprozess auf
     (gehärtetes Env, UTF-8-Runtime). Gibt {'exit': rc, ...} zurück. Wirft bei
     Timeout — der Aufrufer (process_item) wertet das als rc 1 (fail-soft).
 
     Spiegelt bridge_overnight._real_run_fn (gleiches cmd, gleicher Wall-Clock-Cap,
     gleicher {'exit': ...}-Vertrag), getriggert durch einen geclaimten HTTP-Job
-    statt durch eine Seed-Queue. adapter wird an loop_driver durchgereicht."""
+    statt durch eine Seed-Queue. adapter wird an loop_driver durchgereicht.
+
+    stream=False (Default): subprocess.run mit capture_output — Output erst am
+    Ende, ideal für den stillen Daemon-Betrieb (unverändertes Verhalten).
+    stream=True: subprocess.Popen + zwei Reader-Threads, die stdout/stderr LIVE
+    auf die Konsole echoen (getrennt) UND je einen Tail puffern -> man sieht den
+    Build mitlaufen, der result_payload bleibt aber erhalten. Wall-Clock-Cap
+    (round_timeout*max_rounds+120) gilt in beiden Pfaden; bei Überschreitung wird
+    der Prozess gekillt und TimeoutExpired geworfen (fail-soft im Aufrufer)."""
     cmd = [
         sys.executable, "-X", "utf8",
         str(Path(__file__).with_name("loop_driver.py")),
@@ -145,17 +172,62 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         "--seed", seed,
     ]
     cap = round_timeout * max_rounds + 120
-    proc = subprocess.run(
+    if not stream:
+        proc = subprocess.run(
+            cmd, cwd=str(Path(__file__).parent),
+            env=bc.safe_subprocess_env(),
+            capture_output=True, text=True, timeout=cap,
+        )
+        return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
+                "stderr": proc.stderr[-2000:]}
+
+    # Live-Stream: Popen + Tee. stdout/stderr getrennt halten (eigene Threads).
+    import threading
+    proc = subprocess.Popen(
         cmd, cwd=str(Path(__file__).parent),
         env=bc.safe_subprocess_env(),
-        capture_output=True, text=True, timeout=cap,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
     )
-    return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
-            "stderr": proc.stderr[-2000:]}
+    out_lines: list[str] = []
+    err_lines: list[str] = []
+    t_out = threading.Thread(target=_stream_reader,
+                             args=(proc.stdout, sys.stdout, out_lines), daemon=True)
+    t_err = threading.Thread(target=_stream_reader,
+                             args=(proc.stderr, sys.stderr, err_lines), daemon=True)
+    t_out.start()
+    t_err.start()
+    try:
+        rc = proc.wait(timeout=cap)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        raise
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+    return {"exit": rc,
+            "stdout": "".join(out_lines)[-2000:],
+            "stderr": "".join(err_lines)[-2000:]}
+
+
+def _run_fn_accepts_stream(run_fn) -> bool:
+    """True, wenn run_fn ein 'stream'-Keyword (oder **kwargs) akzeptiert. So reichen
+    wir stream nur an passende Runner durch und brechen ältere/injizierte run_fns
+    (ohne stream) nicht."""
+    import inspect
+    try:
+        params = inspect.signature(run_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "stream" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def process_item(item, run_fn=None, *, max_rounds: int = 4,
-                 round_timeout: int = 600, out_payload: dict | None = None) -> int:
+                 round_timeout: int = 600, out_payload: dict | None = None,
+                 stream: bool = False) -> int:
     """Arbeite einen geclaimten WorkItem ab und liefere den rc.
 
     parst item.input_text -> (repo, seed, adapter). Fehlt repo -> rc 2 (Config-
@@ -165,7 +237,10 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
 
     out_payload (optional, in-place gefüllt): bekommt den run_fn-Output bzw. eine
     Fehlerbeschreibung, damit die Ursache NICHT verloren geht (Live-Bug 2026-06-04:
-    ein fehlgeschlagener Job zeigte im DCO nur 'error' ohne stdout/stderr)."""
+    ein fehlgeschlagener Job zeigte im DCO nur 'error' ohne stdout/stderr).
+
+    stream wird an run_fn nur durchgereicht, wenn dessen Signatur es akzeptiert
+    (Default-_real_run_fn ja; ältere injizierte run_fns ohne stream bleiben heil)."""
     run_fn = run_fn or _real_run_fn
     parsed = parse_input_text(item.input_text)
     if parsed.repo is None:
@@ -174,8 +249,9 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
         return 2
     try:
         seed = ensure_seed_structure(parsed.seed)
+        extra = {"stream": stream} if _run_fn_accepts_stream(run_fn) else {}
         out = run_fn(repo=parsed.repo, seed=seed, adapter=parsed.adapter,
-                     max_rounds=max_rounds, round_timeout=round_timeout)
+                     max_rounds=max_rounds, round_timeout=round_timeout, **extra)
         if out_payload is not None and isinstance(out, dict):
             # Nur die informativen Felder durchreichen (kein exit-Code im payload).
             for key in ("stdout", "stderr", "summary", "loop_id", "rounds"):
@@ -205,7 +281,7 @@ _RC_LABEL = {0: "accepted", 3: "escalated", 2: "config/resume-error", 1: "error"
 
 
 def tick(source, run_fn=None, *, max_rounds: int = 4,
-         round_timeout: int = 600, log_fn=None) -> int:
+         round_timeout: int = 600, log_fn=None, stream: bool = False) -> int:
     """Hole+arbeite EINEN Job ab. Return 1 wenn ein Job verarbeitet wurde, 0 wenn
     die Queue leer war.
 
@@ -227,12 +303,13 @@ def tick(source, run_fn=None, *, max_rounds: int = 4,
     repo = parsed.repo or "(kein repo!)"
     log(f"Job aufgenommen: {item.job_id} — repo={repo} adapter={parsed.adapter}")
     log(f"  Build startet (loop_driver, max_rounds={max_rounds}, "
-        f"round_timeout={round_timeout}s) — das kann dauern…")
+        f"round_timeout={round_timeout}s{', live-stream' if stream else ''}) — das kann dauern…")
     rc = 1
     payload: dict = {}
     try:
         rc = process_item(item, run_fn=run_fn, max_rounds=max_rounds,
-                           round_timeout=round_timeout, out_payload=payload)
+                           round_timeout=round_timeout, out_payload=payload,
+                           stream=stream)
         log(f"  Build fertig: rc={rc} ({_RC_LABEL.get(rc, '?')})")
     finally:
         try:
@@ -270,18 +347,23 @@ def _jobpoll_lock_path():
 
 
 def run_watch(source, *, run_fn=None, interval: int, max_rounds: int,
-              round_timeout: int, tick_fn=None, sleep_fn=None) -> int:
+              round_timeout: int, tick_fn=None, sleep_fn=None,
+              stream: bool = False) -> int:
     """Endlos-Loop: tick + Intervall-Backoff, bis KeyboardInterrupt. tick_fn und
-    sleep_fn sind injizierbar (Tests). Liefert rc 0 bei sauberem Abbruch."""
+    sleep_fn sind injizierbar (Tests). Liefert rc 0 bei sauberem Abbruch.
+
+    stream wird an tick_fn nur durchgereicht, wenn dessen Signatur es akzeptiert
+    (das echte tick ja; ältere injizierte tick_fns ohne stream bleiben heil)."""
     tick_fn = tick_fn or tick
     import time
     sleep_fn = sleep_fn or time.sleep
+    tick_extra = {"stream": stream} if _run_fn_accepts_stream(tick_fn) else {}
     _default_log(f"Worker läuft (--watch, alle {interval}s). Warte auf Jobs… (Ctrl-C beendet)")
     idle = 0
     try:
         while True:
             n = tick_fn(source, run_fn=run_fn, max_rounds=max_rounds,
-                        round_timeout=round_timeout)
+                        round_timeout=round_timeout, **tick_extra)
             if n:
                 idle = 0
             else:
@@ -309,27 +391,38 @@ def _build_arg_parser():
                    help="An loop_driver durchgereicht (Default 4).")
     p.add_argument("--round-timeout", type=int, default=600,
                    help="An loop_driver durchgereicht (Default 600s).")
+    p.add_argument("--stream", action="store_true",
+                   help="loop_driver-Output LIVE auf die Konsole streamen "
+                        "(alternativ DUAL_BRIDGE_STREAM=1). Default: still.")
     return p
 
 
-def main(argv=None, *, tick_fn=None, sleep_fn=None) -> int:
+def main(argv=None, *, tick_fn=None, sleep_fn=None, source_override=None) -> int:
     """CLI-Einstieg. get_source() ist fail-closed (http ohne URL -> ValueError);
     wir fangen das und geben rc 2 (Config-Fehler), statt mit Traceback zu sterben.
 
-    tick_fn/sleep_fn injizierbar (Tests laufen ohne Netz/Lock). Im echten Lauf
-    (tick_fn is None) wird der Singleton-Lock geholt, damit nicht zwei Poller
-    parallel claimen."""
+    tick_fn/sleep_fn injizierbar (Tests laufen ohne Netz/Lock). source_override
+    erlaubt Tests, eine fertige Source einzuspeisen (kein get_source/Lock). Im
+    echten Lauf (tick_fn is None) wird der Singleton-Lock geholt, damit nicht zwei
+    Poller parallel claimen.
+
+    Live-Stream: --stream-Flag ODER DUAL_BRIDGE_STREAM=1 -> loop_driver-Output
+    läuft live über die Konsole (statt erst am Ende gesammelt)."""
     import bridge_transport as bt
     args = _build_arg_parser().parse_args(argv)
+    stream = bool(args.stream) or os.environ.get("DUAL_BRIDGE_STREAM") == "1"
 
-    try:
-        source = bt.get_source()
-    except ValueError as exc:
-        print(f"[job_poll] Konfigurationsfehler: {exc}", file=sys.stderr)
-        return 2
+    if source_override is not None:
+        source = source_override
+    else:
+        try:
+            source = bt.get_source()
+        except ValueError as exc:
+            print(f"[job_poll] Konfigurationsfehler: {exc}", file=sys.stderr)
+            return 2
 
-    # Singleton-Lock nur im echten Lauf (nicht bei injiziertem Test-tick).
-    if tick_fn is None:
+    # Singleton-Lock nur im echten Lauf (nicht bei injiziertem Test-tick/Source).
+    if tick_fn is None and source_override is None:
         lock = _jobpoll_lock_path()
         if not bc.acquire_singleton_lock(lock):
             print("[job_poll] Ein job_poll läuft bereits — Abbruch.", file=sys.stderr)
@@ -338,11 +431,12 @@ def main(argv=None, *, tick_fn=None, sleep_fn=None) -> int:
     if args.watch:
         return run_watch(source, run_fn=None, interval=args.interval,
                          max_rounds=args.max_rounds, round_timeout=args.round_timeout,
-                         tick_fn=tick_fn, sleep_fn=sleep_fn)
+                         tick_fn=tick_fn, sleep_fn=sleep_fn, stream=stream)
     # Default / --once: ein Tick.
     _tick = tick_fn or tick
+    _tick_extra = {"stream": stream} if _run_fn_accepts_stream(_tick) else {}
     _tick(source, run_fn=None, max_rounds=args.max_rounds,
-          round_timeout=args.round_timeout)
+          round_timeout=args.round_timeout, **_tick_extra)
     return 0
 
 
