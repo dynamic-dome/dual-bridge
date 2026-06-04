@@ -236,6 +236,86 @@ def test_get_source_unknown_transport_raises():
     assert raised
 
 
+# ---------------------------------------------------------------------------
+# _urllib_client — der echte HTTP-Pfad (war ungetestet / pragma: no cover).
+# Live-Bug 2026-06-04: (1) Cloudflare blockte den nackten Python-urllib-UA mit
+# 403 "error code: 1010"; (2) der Client crashte mit JSONDecodeError, weil er
+# json.loads() blind auf den text/plain-Fehlerbody warf. Beide nur live sichtbar.
+# Wir testen ohne echtes Netz via monkeypatch auf urllib.request.urlopen.
+# ---------------------------------------------------------------------------
+
+class _FakeResp:
+    def __init__(self, code: int, raw: bytes):
+        self._code = code
+        self._raw = raw
+    def getcode(self):
+        return self._code
+    def read(self):
+        return self._raw
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+def test_urllib_client_non_json_body_does_not_crash():
+    """200 mit nicht-JSON-Body -> body=None statt JSONDecodeError."""
+    _fresh()
+    _, bt = _reload()
+    captured = {}
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return _FakeResp(200, b"error code: 1010")   # text/plain, kein JSON
+    bt.urllib.request.urlopen = fake_urlopen
+    status, body = bt._urllib_client("GET", "http://x/api/jobs/next", None, {})
+    assert status == 200
+    assert body is None                                # kein Crash
+
+
+def test_urllib_client_http_error_non_json_body_does_not_crash():
+    """HTTPError (403) mit text/plain-Body -> (403, None) statt Crash."""
+    import urllib.error
+    _fresh()
+    _, bt = _reload()
+    def fake_urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            url="http://x", code=403, msg="Forbidden", hdrs=None,
+            fp=__import__("io").BytesIO(b"error code: 1010"))
+    bt.urllib.request.urlopen = fake_urlopen
+    status, body = bt._urllib_client("GET", "http://x/api/jobs/next", None, {})
+    assert status == 403
+    assert body is None
+
+
+def test_urllib_client_sets_user_agent_against_cloudflare():
+    """Cloudflare 1010 blockt den nackten urllib-UA — der Client MUSS einen
+    expliziten User-Agent setzen."""
+    _fresh()
+    _, bt = _reload()
+    captured = {}
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return _FakeResp(204, b"")
+    bt.urllib.request.urlopen = fake_urlopen
+    bt._urllib_client("GET", "http://x/api/jobs/next", None, {})
+    req = captured["req"]
+    ua = req.get_header("User-agent")                  # urllib title-cases keys
+    assert ua, "kein User-Agent gesetzt"
+    assert "python-urllib" not in ua.lower()           # nicht der Default-UA
+
+
+def test_urllib_client_valid_json_still_parses():
+    """Regression: gültiger 200-JSON-Body wird weiter korrekt geparst."""
+    _fresh()
+    _, bt = _reload()
+    def fake_urlopen(req, timeout=None):
+        return _FakeResp(200, b'{"job_id": "j1", "input_text": "x"}')
+    bt.urllib.request.urlopen = fake_urlopen
+    status, body = bt._urllib_client("GET", "http://x/api/jobs/next", None, {})
+    assert status == 200
+    assert body == {"job_id": "j1", "input_text": "x"}
+
+
 if __name__ == "__main__":
     import sys
     import pytest

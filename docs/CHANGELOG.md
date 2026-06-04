@@ -8,6 +8,17 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Behoben
+- **HttpSource-Client gegen Cloudflare + nicht-JSON-Antworten gehaertet
+  (`bridge_transport.py`, 2026-06-04, live gefunden):** Der B-Worker crashte beim
+  ersten echten Tunnel-Poll mit `JSONDecodeError`. Zwei Ursachen: (1) Cloudflare
+  blockte den stdlib-Default-User-Agent (`Python-urllib/X`) mit `403 "error code:
+  1010"`; (2) `_urllib_client` warf `json.loads()` blind auf den `text/plain`-
+  Fehlerbody. Fix: expliziter `User-Agent` + `_safe_json()` (Parse-Fehler ->
+  `None` statt Crash, sowohl im OK- als auch im HTTPError-Pfad). 4 neue Tests
+  fuer den vorher ungetesteten (`pragma: no cover`) Netz-Pfad; live gegen den
+  echten Tunnel verifiziert (204 + voller claim->completed-Durchstich).
+
 ### Hinzugefuegt
 - **HTTP-Worker-Poll-Loop (`scripts/job_poll.py`, 2026-06-04):** der fehlende
   Daemon, der den DCO-Job-Pull tatsaechlich anschmeisst. Holt ueber

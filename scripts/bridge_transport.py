@@ -121,26 +121,44 @@ class FileSource(Source):
 
 # --- HTTP-Transport (DCO-Job-Pull) ------------------------------------------
 
+# Cloudflare blockt den stdlib-Default-User-Agent ("Python-urllib/X") an einem
+# Tunnel-geschützten Host mit 403 "error code: 1010". Ein expliziter,
+# browser-ähnlicher UA kommt durch. (Live-Bug 2026-06-04, B-Worker über den
+# bot.dynamic-dome.com-Tunnel.)
+_USER_AGENT = "dual-bridge-worker/1.0 (+https://github.com/dynamic-dome/dual-bridge)"
+
+
+def _safe_json(raw: bytes | None) -> dict | None:
+    """Parse einen Response-Body als JSON, aber NIE crashen. Fehlerstatus liefern
+    oft text/plain oder HTML (z.B. Cloudflare "error code: 1010") — dann None."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return None
+
+
 def _urllib_client(method: str, url: str, json_body: dict | None,
                    headers: dict | None) -> tuple[int, dict | None]:
     """Default-HTTP-Client auf stdlib-Basis (keine Fremd-Deps). Wird in Tests
-    durch einen Fake ersetzt — hier läuft also nie echtes Netz im Testlauf."""
+    durch einen Fake ersetzt — hier läuft also nie echtes Netz im Testlauf.
+
+    Robust gegen nicht-JSON-Antworten: ein 403/404/5xx (oder ein durch eine
+    Reverse-Proxy/Cloudflare ersetzter Body) wird als (status, None) gemeldet,
+    nicht als Crash. Setzt einen expliziten User-Agent gegen Cloudflare-1010."""
     data = None
     hdrs = dict(headers or {})
+    hdrs.setdefault("User-Agent", _USER_AGENT)
     if json_body is not None:
         data = json.dumps(json_body).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            status = resp.getcode()
-            raw = resp.read()
-            body = json.loads(raw) if raw else None
-            return status, body
-    except urllib.error.HTTPError as exc:                         # pragma: no cover
-        raw = exc.read()
-        body = json.loads(raw) if raw else None
-        return exc.code, body
+            return resp.getcode(), _safe_json(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, _safe_json(exc.read())
 
 
 class HttpSource(Source):
