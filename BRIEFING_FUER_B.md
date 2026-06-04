@@ -1,8 +1,45 @@
-# Briefing für Laptop B — Diagnose: warum failt der HTTP-Bridge-Job in ~5 s?
+# Briefing für Laptop B — HTTP-Bridge-Job
 
 > Geschrieben von Claude Code auf **Laptop A** am 2026-06-04 für den Agenten auf **Laptop B**.
 > A orchestriert den DCO (Job-Quelle), B ist der dual-bridge-Worker (Job-Verarbeiter).
-> Lies das ganze Dokument, dann arbeite die Diagnose-Schritte der Reihe nach ab.
+
+## ✅ ROOT CAUSE GEFUNDEN + GEFIXT (2026-06-04, Update)
+
+Der ~5s-Fail war **NICHT** codex-PATH (alte Hypothese unten, jetzt zweitrangig).
+Die echte Ursache, live über den DCO-`result_payload` gefunden:
+
+```
+[A] ungueltiger Seed: seed has no '## Ziel' block
+```
+
+`loop_driver.parse_seed` verlangt einen strukturierten Markdown-Seed (`## Ziel` +
+`## Done-Kriterien`), aber der DCO-Job liefert rohen Fließtext → jeder Build brach
+sofort ab. **Gefixt in `job_poll.ensure_seed_structure()`** (Commit `1f3d06b`):
+der rohe Seed wird automatisch ins erwartete Format gewrappt. Gegen den echten
+`loop_driver.parse_seed` verifiziert.
+
+### Was B JETZT tun soll (kurz)
+
+```powershell
+cd C:\Users\domes\AI\dual-bridge
+git pull                            # MUSS 1f3d06b holen
+git log -1 --format="%h %s"         # bestätigen: 1f3d06b fix(jobpoll): ... Seed ... wrappen
+# Alten --watch-Worker beenden (Ctrl-C im Fenster), falls noch einer läuft.
+# Env prüfen (Schritt 1 unten). Dann EIN echter Lauf:
+cd scripts
+python -X utf8 .\job_poll.py --once
+```
+Ein frischer Job liegt in der DCO-Queue (A legt ihn an). Mit dem Fix sollte codex
+jetzt WIRKLICH bauen (dauert Minuten, kein 5s-Abbruch). Erwartung: rc 0 → der Job
+geht im DCO auf `completed`, und im Repo `dynamic-dome/test-repo` entsteht ein
+Loop-Branch mit der Datei `BRIDGE_LIVE_PROOF.md`.
+
+**Melde A zurück:** lief der `--once` durch (codex baute Minuten lang)? Welcher
+rc? Falls wieder ein Fehler: die `[job_poll] ...`-Zeile + den DCO-Job-Status.
+
+---
+
+## (Historisch) Ursprüngliche Diagnose-Schritte — nur falls der Fix NICHT reicht
 
 ## Kontext in 3 Sätzen
 
