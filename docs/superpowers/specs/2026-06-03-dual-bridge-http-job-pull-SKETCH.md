@@ -134,18 +134,99 @@ Hier greifen direkt deine vorhandenen Dossiers
 → Damit ist es derselbe „injizierbare Caller"-Trick: der Worker weiß nicht, woher
 der Job kam.
 
-## 9. Anschluss an den DCO
+## 9. Anschluss an den DCO (gegen den echten IST-Zustand)
 
-Der DCO mit seiner `todos.db` ist der **natürliche Producer**: statt Tasks als
-Dateien zu schreiben, enqueued er per `POST /jobs`. Der Broker kann sogar **derselbe
-Prozess** wie der DCO sein oder direkt auf dessen `todos.db` aufsetzen. Damit
-schließt sich der Kreis zu den DCO-ready gebauten Notifier/Scheduler.
+Wichtigste Erkenntnis nach Sichtung der realen DCO-Quellen: **Der DCO ist den
+Broker schon fast** — wir müssen kein zweites Queue-System bauen, sondern nur
+einen kleinen Übersetzungsschritt einziehen.
+
+### 9.1 Was im DCO bereits existiert
+
+- **`jobs`-Tabelle mit atomarem Claim.** `jobs.py` hat `create_job(chat_id, ...)`
+  mit `worker_type`, `result_payload` und Status `queued/running/waiting_approval`.
+  Der Claim läuft über `transition_status(job_id, expected_status, status, ...)`,
+  intern ein `UPDATE jobs SET status=? ... WHERE job_id=? AND status=?` — also
+  **exakt das Compare-and-Swap**, das diese Skizze für den Broker vorschlägt. Das
+  „nur einer gewinnt das Rennen"-Problem ist im DCO bereits sauber gelöst.
+- **`todos`-Tabelle ist eine menschliche To-do-Liste**, KEINE Job-Queue:
+  `todos.py` mit `add(chat_id, text, parent_id)`, Feldern `todo_id, chat_id, text,
+  done, tag (DEFAULT 'sonst'), parent_id, stale_level`. Tags aus `config.py`
+  (`VALID_TAGS`, `DEFAULT_TAG="sonst"`).
+- **Robuste Persistenz.** `db.py`: thread-local SQLite + WAL +
+  `wal_autocheckpoint=100`, `lazy_path()`-Resolver (DATA_DIR wird frisch gelesen —
+  Daten-Sicherheits-Invariante). Reicht für N≈2–5 Geräte locker.
+
+→ Konsequenz: **Wir brauchen keinen separaten Broker-Service.** Die `jobs`-Tabelle
+IST die Claim-fähige Queue aus Abschnitt 3–4. Was fehlt, ist (a) ein Mini-Router
+`todos → jobs` und (b) ein HTTP-Pull-Endpunkt für die Bridge-Worker.
+
+### 9.2 Der Wunschfluss (genau wie vom User beschrieben)
+
+```
+[Mensch/Agent]  todos.add(chat_id, text, tag="bridge")        ← eine Zeile in die To-do
+      │
+      ▼
+[DCO-Router]    erkennt tag=="bridge" → create_job(            ← kleiner Übersetzer
+                  worker_type="dual-bridge",
+                  payload={repo, kind, adapter, text}, status="queued")
+      │
+      ▼
+[jobs-Tabelle]  status=queued                                  ← schon da, atomar
+      │   GET /jobs/next?worker_type=dual-bridge
+      ▼   (transition_status queued→running = der Claim)
+[Bridge-Worker] handoff_poll mit DUAL_BRIDGE_TRANSPORT=http     ← injizierbarer Caller
+      │   führt loop_driver/Adapter aus (lokal, wie heute)
+      ▼   POST /jobs/<id>/result {result_payload, rc}
+[jobs-Tabelle]  status=running→done (oder waiting_approval/error)
+      │
+      ▼
+[DCO-Router]    markiert den Quell-Todo done + Notifier-Digest  ← Kreis geschlossen
+```
+
+Der Bridge-Worker weiß weiterhin **nicht**, woher der Job kam — derselbe
+„injizierbarer Caller"-Trick wie beim Dateitransport (Abschnitt 8). Nur der
+Quell-Treiber wechselt von `file` auf `http`.
+
+### 9.3 Die zwei kleinen neuen Teile
+
+1. **Router/Übersetzer `todos → jobs`** (im DCO):
+   - Trigger: ein Todo mit definiertem Tag (Vorschlag: `tag="bridge"`, erweitert
+     `VALID_TAGS`). Tag-basiertes Routing hält es entkoppelt — nur getaggte Todos
+     werden zu Jobs, der Rest bleibt reine menschliche Liste.
+   - Mapping: Todo-`text` → Job-`payload`. Konvention im Text oder strukturiertes
+     Feld (z. B. erste Zeile `repo=…  kind=implement  adapter=codex`, Rest = Auftrag).
+   - Idempotenz: pro Todo höchstens ein Job (Job referenziert `todo_id`).
+2. **HTTP-Pull-Oberfläche über die `jobs`-Tabelle:**
+   - `GET /jobs/next?worker_type=dual-bridge` → `transition_status(queued→running)`
+     als atomarer Claim (Code existiert, nur als Endpoint freilegen).
+   - `POST /jobs/<id>/result` → `transition_status(running→done|waiting_approval|error)`,
+     schreibt `result_payload`, triggert Notifier-Digest + Todo-`done`.
+   - Bind auf `127.0.0.1`/Tailnet, Bearer-Token (Abschnitt 7), `repo`-Allowlist.
+
+### 9.4 Warum das so gut passt
+
+- **Eine DB statt zwei.** Kein zweites Queue-Schema, keine Sync-Probleme zwischen
+  Broker und DCO — der Broker IST der DCO.
+- **Exit-Mapping bleibt identisch.** loop_driver `0=accepted, 3=escalated,
+  2/1=error` mappt direkt auf `done / waiting_approval / error` der `jobs`-Tabelle —
+  dieselbe Semantik wie der Overnight-Scheduler heute (`_EXIT_OUTCOME`).
+- **DCO-ready zahlt sich aus.** Notifier und Overnight-Scheduler sind bereits mit
+  injizierbarem `run_fn`/`send_fn` gebaut; der Router muss nur `create_job` aufrufen
+  und am Ende den Digest auslösen.
 
 ## 10. Offene Fragen (vor einer echten Spec zu klären)
 
-- **Broker = eigener Service oder Teil des DCO?** (Eine DB oder zwei?)
+- **Router-Ort:** als DCO-internes Modul (gleiche `db.py`/Transaktion) oder als
+  schmaler Sidecar, der `jobs.create_job()` aufruft? (Tendenz: intern, eine DB.)
+- **Tag-Konvention:** `tag="bridge"` neu in `VALID_TAGS`, oder eigener
+  `worker_type`-Marker im Todo-Text? Wie wird `repo/kind/adapter` aus dem Text geparst
+  (strukturierte erste Zeile vs. separate Felder)?
+- **Todo↔Job-Lebenszyklus:** Wer markiert den Quell-Todo `done` — der Router beim
+  Result-Callback, automatisch, oder erst nach Mensch-Bestätigung bei
+  `waiting_approval`?
+- **HTTP-Endpunkte am DCO:** kommen sie in dessen vorhandenes `api.py` (FastAPI) oder
+  in einen separaten Bridge-Router-Mount? Auth-Token-Quelle (Env wie heute)?
 - **Hosting:** rein lokal/Tailnet, oder über Tunnel auch von unterwegs erreichbar?
-- **Persistenz:** SQLite (einfach, reicht für N≈2–5) vs. etwas Größeres (unnötig?).
 - **Push statt Pull später?** (Long-Polling/SSE für Sofort-Zustellung — Pull zuerst.)
 - **Brauchen wir es jetzt?** Erst wenn Drive-Latenz/N>2 real wehtun. Sonst liegen lassen.
 
