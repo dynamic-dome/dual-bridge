@@ -688,40 +688,55 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
     open_task_id = ""
     workroot = STATE_DIR / "work"
 
+    # git-building adapters (repo set) keep the STANDING seed as the auftrag every
+    # round; the work-so-far rides on the loop branch's file state, not on the
+    # prose payload. Text adapters (echo/increment, repo='') keep the telephone-
+    # game semantics where each side's answer becomes the next input.
+    # Found 2026-06-04 live: a 2-round codex ping-pong lost the build seed after
+    # round 0 (B received A's prose answer 'Stand ist damit:' instead of the
+    # step_<N> instruction and built nothing), so step_2 never appeared (P012).
+    building = bool(repo)
+
     for round_no in range(max_rounds):
         a_payload = ""  # bound even if the A-runner aborts before computing it
-        # 1. A works inline on the current payload. Build adapters get the full
-        #    task_id/repo/branch/workdir fm (shared loop branch = continuity);
-        #    text adapters ignore the extra keys.
+        # 1. A works on the current auftrag. For building adapters that is always
+        #    the standing seed (continuity via the loop branch); for text adapters
+        #    it is the running payload. Build adapters also get the full
+        #    task_id/repo/branch/workdir fm; text adapters ignore the extra keys.
+        a_auftrag = seed if building else payload
         runner = runners.RUNNERS.get(adapter)
         if runner is None:
             aborted, abort_reason = True, f"unbekannter adapter {adapter!r}"
             append_state(loop_id, {"round": round_no, "side": "A",
-                                   "payload_in": payload, "payload_out": "",
+                                   "payload_in": a_auftrag, "payload_out": "",
                                    "task_id": "", "status": "error"})
             break
-        a_fm = {"task_id": bc.make_task_id(), "payload": payload,
+        a_fm = {"task_id": bc.make_task_id(), "payload": a_auftrag,
                 "repo": repo, "base_branch": base_branch,
                 "branch": loop_branch, "workdir_name": loop_id}
         try:
-            a_res = runner(auftrag=payload, fm=a_fm, workroot=workroot)
+            a_res = runner(auftrag=a_auftrag, fm=a_fm, workroot=workroot)
         except Exception as exc:  # noqa: BLE001 -- a runner must not crash the loop
             aborted, abort_reason = True, f"A-runner crash: {exc}"
             append_state(loop_id, {"round": round_no, "side": "A",
-                                   "payload_in": payload, "payload_out": "",
+                                   "payload_in": a_auftrag, "payload_out": "",
                                    "task_id": "", "status": "error"})
             break
         if a_res.status != "done":
             aborted, abort_reason = True, f"A-runner error: {a_res.error_text}"
             append_state(loop_id, {"round": round_no, "side": "A",
-                                   "payload_in": payload, "payload_out": "",
+                                   "payload_in": a_auftrag, "payload_out": "",
                                    "task_id": "", "status": "error"})
             break
         a_payload = a_res.antwort.strip()
 
-        # 2. Write task to B with A's freshly computed payload. B builds on the
-        #    SAME loop branch so its commit continues A's work, not base.
-        task_id = write_round_task(loop_id, round_no, a_payload, adapter,
+        # 2. Write task to B. For building adapters B must receive the STANDING
+        #    seed (so it knows what to build), not A's prose answer — B continues
+        #    A's work via the shared loop branch's file state. Text adapters pass
+        #    A's computed payload along (telephone game). B builds on the SAME
+        #    loop branch so its commit continues A's work, not base.
+        b_auftrag = seed if building else a_payload
+        task_id = write_round_task(loop_id, round_no, b_auftrag, adapter,
                                    repo=repo, base_branch=base_branch,
                                    loop_branch=loop_branch)
         open_task_id = task_id
@@ -748,9 +763,13 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
 
         b_payload = fm.get("payload", "")
         append_state(loop_id, {"round": round_no, "side": "B",
-                               "payload_in": a_payload, "payload_out": b_payload,
+                               "payload_in": b_auftrag, "payload_out": b_payload,
                                "task_id": task_id, "status": "done"})
-        payload = b_payload
+        # Building adapters keep the standing seed as next round's auftrag (the
+        # built state advances on the loop branch); text adapters feed B's answer
+        # back in as the next input.
+        if not building:
+            payload = b_payload
         rounds_done += 1
         open_task_id = ""
 

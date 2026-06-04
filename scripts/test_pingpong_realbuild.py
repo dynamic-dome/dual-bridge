@@ -150,6 +150,100 @@ def test_pingpong_b_builds_on_same_loop_branch(monkeypatch, tmp_path):
     assert "B-line" in content, "B did not build on A's loop branch (continuity broken)"
 
 
+def _fake_codex_builds_next_step(monkeypatch):
+    """Fake codex that INTERPRETS the standing seed instead of appending a fixed
+    line: it reads pingpong_chain.py, finds the highest existing step_<N>, and
+    appends step_<N+1> in the seed's exact shape, then self-commits.
+
+    This is the realistic builder behaviour the sharpened seed asks for. It only
+    makes progress every round if the build *auftrag* actually reaches it each
+    round — which is exactly what the round>=1 payload-passthrough bug breaks
+    (after round 0 the builder receives the other side's prose answer, not the
+    seed, so it can't know what to build)."""
+    import re
+    real_run = ca.subprocess.run
+
+    def fake_run(cmd, **kw):
+        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
+        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
+            return real_run(cmd, **kw)
+        # Only build when the task text actually asks for a step_<N> chain. If the
+        # auftrag is the other side's prose answer (the bug), build nothing — the
+        # commit then carries no new step and the round produces no progress.
+        # The real runner passes the auftrag via stdin (input=, rule 10.8/P008).
+        auftrag = kw.get("input") or ""
+        workdir = Path(kw.get("cwd"))
+        f = workdir / "pingpong_chain.py"
+        existing = f.read_text(encoding="utf-8") if f.exists() else ""
+        builds_chain = "step_" in auftrag and "pingpong_chain.py" in auftrag
+        if builds_chain:
+            nums = [int(n) for n in re.findall(r"def step_(\d+)\(", existing)]
+            nxt = (max(nums) + 1) if nums else 1
+            block = (f"def step_{nxt}() -> int:\n"
+                     f'    """Ping-pong round {nxt}."""\n'
+                     f"    return {nxt}\n")
+            f.write_text(existing + ("\n" if existing else "") + block,
+                         encoding="utf-8")
+            _git(workdir, "add", "-A")
+            _git(workdir, "commit", "-m", f"Add ping-pong step {nxt}")
+        class _P:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+        for i, tok in enumerate(cmd):
+            if tok == "-o":
+                Path(cmd[i + 1]).write_text(
+                    f"built step (auftrag_had_chain={builds_chain})",
+                    encoding="utf-8")
+        return _P()
+
+    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+
+def test_pingpong_seed_auftrag_survives_round_1(monkeypatch, tmp_path):
+    """Regression for the 2026-06-04 live finding: a 2-round ping-pong build must
+    yield step_1 (A, round 0) AND step_2 (B, round 1) on the loop branch.
+
+    The bug: run_loop feeds round N>=1 the *previous side's answer* as the new
+    auftrag (payload = b_payload), so the standing build seed is lost after round
+    0. The builder in round 1 receives prose ('Stand ist damit:') instead of the
+    step_<N> instruction and builds nothing -> step_2 never appears.
+
+    Fix target: for git-building adapters the standing seed auftrag is passed to
+    every round; continuity of the work-so-far rides on the loop branch's file
+    state, not on the prose payload."""
+    origin = _make_origin(tmp_path)
+    _fake_codex_builds_next_step(monkeypatch)
+
+    def b_tick(*_a, **_k):
+        _b_polls_once()
+
+    seed = ("Append exactly ONE new function to pingpong_chain.py named "
+            "step_<N> (next unused integer), shape def step_<N>() -> int with a "
+            "docstring returning <N>. Do not change existing functions.")
+    summary = ld.run_loop(
+        seed=seed, max_rounds=2, adapter="codex",
+        round_timeout=30, interval=0.2, b_tick=b_tick,
+        repo=origin, base_branch="main",
+    )
+    assert not summary["aborted"], summary["abort_reason"]
+    assert summary["rounds_done"] == 2, summary
+
+    loop_branch = f"bridge/{summary['loop_id']}"
+    probe = tmp_path / "probe2"
+    clone = subprocess.run(
+        ["git", "clone", "--branch", loop_branch, origin, str(probe)],
+        capture_output=True, text=True,
+    )
+    assert clone.returncode == 0, f"loop branch not pushed: {clone.stderr}"
+    content = (probe / "pingpong_chain.py").read_text(encoding="utf-8")
+    assert "def step_1(" in content, "round 0 (A) build missing"
+    assert "def step_2(" in content, (
+        "round 1 (B) built nothing — standing seed auftrag was lost after "
+        "round 0 (payload became the other side's prose answer)")
+
+
 def test_pingpong_echo_still_works_without_repo(monkeypatch, tmp_path):
     """Back-compat: the echo adapter (no repo, no git) must keep working — the
     fix must not require a repo for non-building adapters."""
