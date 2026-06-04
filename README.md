@@ -113,6 +113,9 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | `TELEGRAM_CHAT_ID` | Telegram-Chat-ID, an die der Notifier sendet (mit DCO geteilt) | — |
 | `DUAL_BRIDGE_TG_TOKEN` | Override für `TELEGRAM_TOKEN` (nur dual-bridge) | leer = `TELEGRAM_TOKEN` |
 | `DUAL_BRIDGE_TG_CHAT` | Override für `TELEGRAM_CHAT_ID` (nur dual-bridge) | leer = `TELEGRAM_CHAT_ID` |
+| `DUAL_BRIDGE_TRANSPORT` | Job-Quelle: `file` (Lane/Drive) oder `http` (DCO-Job-Pull) | `file` |
+| `DCO_BRIDGE_URL` | Basis-URL des DCO-HTTP-API (nur bei `http`; fail-closed wenn leer) | — |
+| `DCO_BRIDGE_TOKEN` | Bearer-Token des Workers für den DCO-Job-Pull | — |
 
 Endpoint-Werte: `claude@laptop-a` (sendet A→B, empfängt B→A) oder
 `codex@laptop-b` (sendet B→A, empfängt A→B).
