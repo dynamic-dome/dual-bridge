@@ -324,6 +324,63 @@ def test_main_watch_loops_until_stop():
 
 
 # ---------------------------------------------------------------------------
+# (5) Singleton-Lock: eigener Pfad, NIE der geteilte handoff_poll/loop_driver-Lock
+# ---------------------------------------------------------------------------
+
+def test_jobpoll_lock_path_differs_from_shared_lock_with_override():
+    """Mit gesetztem DUAL_BRIDGE_LOCK (geteilter Pfad von handoff_poll/loop_driver)
+    MUSS job_poll trotzdem einen EIGENEN Lock-Dateinamen wählen — sonst sperren
+    sich die Daemons gegenseitig aus. Der Lock bleibt im selben Verzeichnis
+    (Test-Isolation), aber mit job_poll-eigenem Namen."""
+    _fresh()
+    bc, _, jp = _reload()
+    shared = Path(tempfile.mkdtemp(prefix="bridge-lock-")) / "poller.lock"
+    os.environ["DUAL_BRIDGE_LOCK"] = str(shared)
+    bc, _, jp = _reload()
+    own = jp._jobpoll_lock_path()
+    assert own != shared                       # NICHT der geteilte Lock
+    assert own.name == "dual-bridge-jobpoll.lock"
+    assert own.parent == shared.parent         # selbes Verzeichnis (Isolation bleibt)
+
+
+def test_jobpoll_lock_path_without_override_uses_tempdir():
+    """Ohne Override: eigener Lock im System-Tempdir (kein geteilter Pfad)."""
+    _fresh()
+    bc, _, jp = _reload()
+    os.environ.pop("DUAL_BRIDGE_LOCK", None)
+    bc, _, jp = _reload()
+    own = jp._jobpoll_lock_path()
+    assert own.name == "dual-bridge-jobpoll.lock"
+    assert own.parent == Path(tempfile.gettempdir())
+
+
+def test_main_aborts_when_jobpoll_lock_already_held():
+    """Echter Lock-Pfad (tick_fn=None -> Lock-Block laeuft): haelt ein lebender
+    job_poll den Lock, bricht ein zweiter main() mit rc 2 ab. Deckt den zuvor
+    ungetesteten Lock-Block in main() ab."""
+    _fresh()
+    bc, bt, jp = _reload()
+    os.environ["DUAL_BRIDGE_TRANSPORT"] = "http"
+    os.environ["DCO_BRIDGE_URL"] = "http://test/api"
+    lock_dir = Path(tempfile.mkdtemp(prefix="bridge-lock-"))
+    os.environ["DUAL_BRIDGE_LOCK"] = str(lock_dir / "poller.lock")
+    bc, bt, jp = _reload()
+    # Einen LEBENDEN Fremd-Lock auf dem job_poll-Pfad simulieren (anderer PID).
+    own = jp._jobpoll_lock_path()
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text("999999999\n2026-01-01T00:00:00\n", encoding="utf-8")
+    # 999999999 ist (praktisch sicher) kein lebender PID -> waere STALE und wuerde
+    # uebernommen. Wir patchen _pid_alive, damit der Fremd-Lock als LEBEND gilt.
+    orig_alive = bc._pid_alive
+    bc._pid_alive = lambda pid: True
+    try:
+        rc = jp.main(["--once"])           # tick_fn=None -> echter Lock-Block
+    finally:
+        bc._pid_alive = orig_alive
+    assert rc == 2                          # Lock belegt -> sauberer Abbruch
+
+
+# ---------------------------------------------------------------------------
 # Dual-runnable Footer
 # ---------------------------------------------------------------------------
 

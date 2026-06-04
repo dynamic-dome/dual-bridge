@@ -173,6 +173,20 @@ def tick(source, run_fn=None, *, max_rounds: int = 4,
 _JOBPOLL_LOCK_NAME = "dual-bridge-jobpoll.lock"
 
 
+def _jobpoll_lock_path():
+    """Eigener Singleton-Lock-Pfad — NIE der geteilte default_lock_path().
+
+    Mit DUAL_BRIDGE_LOCK-Override (Tests/CI) bleibt der Lock im selben
+    Verzeichnis wie der geteilte Pfad (Isolation), bekommt aber einen
+    job_poll-eigenen Dateinamen, damit sich job_poll, handoff_poll und
+    loop_driver NICHT gegenseitig aussperren. Ohne Override: System-Tempdir."""
+    from pathlib import Path
+    import tempfile
+    override = os.environ.get("DUAL_BRIDGE_LOCK")
+    base = Path(override).parent if override else Path(tempfile.gettempdir())
+    return base / _JOBPOLL_LOCK_NAME
+
+
 def run_watch(source, *, run_fn=None, interval: int, max_rounds: int,
               round_timeout: int, tick_fn=None, sleep_fn=None) -> int:
     """Endlos-Loop: tick + Intervall-Backoff, bis KeyboardInterrupt. tick_fn und
@@ -225,11 +239,7 @@ def main(argv=None, *, tick_fn=None, sleep_fn=None) -> int:
 
     # Singleton-Lock nur im echten Lauf (nicht bei injiziertem Test-tick).
     if tick_fn is None:
-        from pathlib import Path as _P
-        import tempfile
-        lock = bc.default_lock_path()
-        if not os.environ.get("DUAL_BRIDGE_LOCK"):
-            lock = _P(tempfile.gettempdir()) / _JOBPOLL_LOCK_NAME
+        lock = _jobpoll_lock_path()
         if not bc.acquire_singleton_lock(lock):
             print("[job_poll] Ein job_poll läuft bereits — Abbruch.", file=sys.stderr)
             return 2
