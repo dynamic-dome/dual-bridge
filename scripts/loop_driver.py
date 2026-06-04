@@ -173,8 +173,14 @@ def append_state(loop_id: str, record: dict) -> None:
 
 
 def write_round_task(loop_id: str, round_no: int, payload: str,
-                     adapter: str) -> str:
-    """Write an open loop task into THIS endpoint's send lane. Returns task_id."""
+                     adapter: str, repo: str = "", base_branch: str = "main",
+                     loop_branch: str = "") -> str:
+    """Write an open loop task into THIS endpoint's send lane. Returns task_id.
+
+    For git-building adapters (codex/claude) repo/base_branch/loop_branch are
+    embedded so B's runner builds on the SAME loop branch as A (continuity across
+    the handoff). For text adapters (echo) they are empty and ignored; B's
+    _codex_runner is never reached because the adapter is echo."""
     bc.ensure_dirs()
     me = bc.this_endpoint()
     lane = bc.send_lane()
@@ -187,6 +193,9 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
         "status": "open", "task_id": task_id, "kind": "echo",
         "adapter": adapter,
         "loop_id": loop_id, "round": str(round_no), "payload": payload,
+        "repo": repo, "base_branch": base_branch,
+        "branch": loop_branch or f"bridge/{loop_id}",
+        "workdir_name": loop_id,
         "claimed_by": "", "claimed_at": "",
     }
     body = (f"## Auftrag\n{payload}\n\n"
@@ -652,25 +661,38 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
 
 
 def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
-             interval: float = 5, b_tick=None) -> dict:
+             interval: float = 5, b_tick=None, repo: str = "",
+             base_branch: str = "main") -> dict:
     """Drive the ping-pong loop. Each round: A works inline on the current
     payload, writes a task to B, waits for B's result (timeout), takes B's
     payload as the next round's input. `b_tick` is an optional callable invoked
     once per round AFTER the task is written (tests use it to run a local B
     poll; in production B is a separate live poller, so b_tick stays None).
 
+    git-building adapters (codex/claude) need a task_id + repo + a STABLE loop
+    branch so the built state survives the A->B->A handoff: both A's inline build
+    and B's claimed build commit onto bridge/<loop_id> (same continuity mechanism
+    as the goal-loop's loop_branch). Non-building adapters (echo/increment) pass
+    repo='' and just exchange text payloads — task_id is still supplied (harmless
+    for echo, required by codex). Found 2026-06-04: ping-pong had only ever run
+    with the echo stub, so the codex runner's task_id/repo requirements broke it.
+
     Returns a summary dict. fail-safe: on timeout / B-error / runner crash the
     loop aborts cleanly (no hang) and reports the open task_id + last payload."""
     loop_id = _next_loop_id()
+    loop_branch = f"bridge/{loop_id}"
     payload = seed
     rounds_done = 0
     aborted = False
     abort_reason = ""
     open_task_id = ""
+    workroot = STATE_DIR / "work"
 
     for round_no in range(max_rounds):
         a_payload = ""  # bound even if the A-runner aborts before computing it
-        # 1. A works inline on the current payload.
+        # 1. A works inline on the current payload. Build adapters get the full
+        #    task_id/repo/branch/workdir fm (shared loop branch = continuity);
+        #    text adapters ignore the extra keys.
         runner = runners.RUNNERS.get(adapter)
         if runner is None:
             aborted, abort_reason = True, f"unbekannter adapter {adapter!r}"
@@ -678,9 +700,11 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
                                    "payload_in": payload, "payload_out": "",
                                    "task_id": "", "status": "error"})
             break
+        a_fm = {"task_id": bc.make_task_id(), "payload": payload,
+                "repo": repo, "base_branch": base_branch,
+                "branch": loop_branch, "workdir_name": loop_id}
         try:
-            a_res = runner(auftrag=payload, fm={"payload": payload},
-                           workroot=None)
+            a_res = runner(auftrag=payload, fm=a_fm, workroot=workroot)
         except Exception as exc:  # noqa: BLE001 -- a runner must not crash the loop
             aborted, abort_reason = True, f"A-runner crash: {exc}"
             append_state(loop_id, {"round": round_no, "side": "A",
@@ -695,13 +719,17 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
             break
         a_payload = a_res.antwort.strip()
 
-        # 2. Write task to B with A's freshly computed payload.
-        task_id = write_round_task(loop_id, round_no, a_payload, adapter)
+        # 2. Write task to B with A's freshly computed payload. B builds on the
+        #    SAME loop branch so its commit continues A's work, not base.
+        task_id = write_round_task(loop_id, round_no, a_payload, adapter,
+                                   repo=repo, base_branch=base_branch,
+                                   loop_branch=loop_branch)
         open_task_id = task_id
 
-        # 3. (tests only) let a local B worker process the task.
+        # 3. (tests only) let a local B worker process the task. Pass task_id so
+        #    the hook signature matches the goal-loop/build-review b_tick(task_id).
         if b_tick is not None:
-            b_tick()
+            b_tick(task_id)
 
         # 4. Wait for B's result (per-round timeout -> clean abort).
         fm = wait_for_result(task_id, timeout=round_timeout, interval=interval)
@@ -816,6 +844,12 @@ def main(argv: list[str] | None = None) -> int:
     # a user who forgot --repo must get the actionable "--repo" error, not the
     # "Loop laeuft bereits" lock-conflict message that would otherwise shadow it
     # whenever another loop happens to be running.
+    # ping-pong with a git-building adapter also needs a repo (the build commits
+    # onto the loop branch). The echo/increment text adapters do not.
+    if args.mode == "ping-pong" and args.adapter in ("codex", "claude") and not args.repo:
+        print(f"[A] --mode ping-pong --adapter {args.adapter} braucht --repo "
+              "(der Build committet auf den Loop-Branch).")
+        return 2
     if args.mode in ("build-review", "goal-loop") and not args.repo:
         print(f"[A] --mode {args.mode} braucht --repo.")
         return 2
@@ -894,7 +928,8 @@ def main(argv: list[str] | None = None) -> int:
         summary = run_loop(seed=args.seed, max_rounds=args.max_rounds,
                            adapter=args.adapter,
                            round_timeout=args.round_timeout,
-                           interval=args.interval, b_tick=None)
+                           interval=args.interval, b_tick=None,
+                           repo=args.repo, base_branch=args.base_branch)
     except KeyboardInterrupt:
         print("\n[A] Strg+C -- Loop abgebrochen.")
         return 1

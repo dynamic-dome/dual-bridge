@@ -212,7 +212,19 @@ def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
             if cp.returncode != 0:
                 raise RuntimeError(f"git {args[0]} failed: {cp.stderr.strip()}")
         return workdir
-    cp = _run_git(None, "clone", "--branch", base_branch, repo, str(workdir))
+    # On a FRESH clone, prefer the loop branch if it already exists on origin, so
+    # the OTHER side's prior work continues instead of restarting from base. This
+    # is the ping-pong continuity seam: A built on bridge/<loop_id> and pushed it;
+    # B's workdir is fresh, so without this it would clone base and silently drop
+    # A's commit (the next builder's work must build ON the handoff, not beside
+    # it). The fetch/reset branch above already honoured prefer_branch for an
+    # existing workdir; this closes the same gap for the first clone.
+    clone_branch = base_branch
+    if prefer_branch:
+        ls = _run_git(None, "ls-remote", "--heads", repo, prefer_branch)
+        if ls.returncode == 0 and ls.stdout.strip():
+            clone_branch = prefer_branch
+    cp = _run_git(None, "clone", "--branch", clone_branch, repo, str(workdir))
     if cp.returncode != 0:
         raise RuntimeError(f"git clone failed: {cp.stderr.strip()}")
     # Ensure a committer identity exists for later commits (CI-less machine).
