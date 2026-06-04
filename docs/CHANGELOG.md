@@ -8,6 +8,10 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Hinzugefuegt
+- **Projekt-Skelett:** `AGENTS.md` als kurze Agenten-Laufzeitdatei und
+  `docs/PROJECT.md` als Projektsteckbrief ergaenzt.
+
 ### Geplant
 - **Echte Verteilung (späterer Scope):** dateibasierter Transport → HTTP-Job-Pull
   mit demselben Claim-Mechanismus.
