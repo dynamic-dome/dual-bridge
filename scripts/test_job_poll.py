@@ -203,6 +203,33 @@ def test_process_item_run_crash_maps_to_rc_1():
     assert rc == 1
 
 
+def test_process_item_fills_out_payload_with_run_output():
+    """out_payload wird mit dem run_fn-Output befüllt (stdout/stderr/summary),
+    damit der Fehlergrund nicht verloren geht (Live-Bug 2026-06-04)."""
+    _fresh()
+    _, bt, jp = _reload()
+    item = _work_item(bt, "j5", "repo=https://x/y\nziel")
+    runner = _Runner(exit_code=2)             # _Runner liefert stdout="out"
+    out_payload: dict = {}
+    rc = jp.process_item(item, run_fn=runner, max_rounds=3, round_timeout=600,
+                         out_payload=out_payload)
+    assert rc == 2
+    assert out_payload.get("stdout") == "out"  # Output durchgereicht
+
+
+def test_process_item_fills_out_payload_on_crash():
+    """Auch bei run_fn-Crash bekommt out_payload eine Fehlerbeschreibung."""
+    _fresh()
+    _, bt, jp = _reload()
+    item = _work_item(bt, "j6", "repo=https://x/y\nziel")
+    runner = _Runner(raise_exc=RuntimeError("kaputt"))
+    out_payload: dict = {}
+    rc = jp.process_item(item, run_fn=runner, max_rounds=3, round_timeout=600,
+                         out_payload=out_payload)
+    assert rc == 1
+    assert "kaputt" in (out_payload.get("error") or "")
+
+
 # ---------------------------------------------------------------------------
 # (3) tick — claim -> process -> publish (publish im finally garantiert)
 # ---------------------------------------------------------------------------
@@ -254,6 +281,22 @@ def test_tick_publishes_rc_from_run():
     source = _http_source(bt, fake)
     jp.tick(source, run_fn=_Runner(exit_code=3))
     assert _posts(fake)[0]["json"]["rc"] == 3
+
+
+def test_tick_publishes_run_output_as_payload():
+    """tick schickt den run_fn-Output als result_payload mit (nicht None) —
+    sonst geht die Fehlerursache im DCO verloren (Live-Bug 2026-06-04)."""
+    _fresh()
+    _, bt, jp = _reload()
+    fake = _FakeHttpClient({
+        "/jobs/next": [(200, {"job_id": "jp", "input_text": "repo=https://x/y\nz"})],
+        "/jobs/jp/result": [(200, {"ok": True})],
+    })
+    source = _http_source(bt, fake)
+    jp.tick(source, run_fn=_Runner(exit_code=2))   # _Runner: stdout="out"
+    payload = _posts(fake)[0]["json"]["result_payload"]
+    assert payload is not None
+    assert payload.get("stdout") == "out"
 
 
 def test_tick_publishes_even_when_run_crashes():

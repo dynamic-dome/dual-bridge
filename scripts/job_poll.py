@@ -113,24 +113,38 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
 
 
 def process_item(item, run_fn=None, *, max_rounds: int = 4,
-                 round_timeout: int = 600) -> int:
+                 round_timeout: int = 600, out_payload: dict | None = None) -> int:
     """Arbeite einen geclaimten WorkItem ab und liefere den rc.
 
     parst item.input_text -> (repo, seed, adapter). Fehlt repo -> rc 2 (Config-
     Fehler), ohne run_fn aufzurufen. Sonst run_fn(...) -> {'exit': rc}; ein Crash/
     Timeout aus run_fn wird zu rc 1 gekapselt (fail-soft, damit ein kaputter Job
-    den Loop nie killt). Der DCO mappt rc selbst auf den finalen Status."""
+    den Loop nie killt). Der DCO mappt rc selbst auf den finalen Status.
+
+    out_payload (optional, in-place gefüllt): bekommt den run_fn-Output bzw. eine
+    Fehlerbeschreibung, damit die Ursache NICHT verloren geht (Live-Bug 2026-06-04:
+    ein fehlgeschlagener Job zeigte im DCO nur 'error' ohne stdout/stderr)."""
     run_fn = run_fn or _real_run_fn
     parsed = parse_input_text(item.input_text)
     if parsed.repo is None:
+        if out_payload is not None:
+            out_payload["error"] = "config: seed ohne repo= (rc 2)"
         return 2
     try:
         out = run_fn(repo=parsed.repo, seed=parsed.seed, adapter=parsed.adapter,
                      max_rounds=max_rounds, round_timeout=round_timeout)
+        if out_payload is not None and isinstance(out, dict):
+            # Nur die informativen Felder durchreichen (kein exit-Code im payload).
+            for key in ("stdout", "stderr", "summary", "loop_id", "rounds"):
+                if key in out:
+                    out_payload[key] = out[key]
         return int(out.get("exit", 1))
     except Exception as exc:  # noqa: BLE001  (Timeout, Subprozessfehler, …)
-        print(f"[job_poll] run_fn fehlgeschlagen für {item.job_id}: "
-              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        msg = f"{type(exc).__name__}: {exc}"
+        print(f"[job_poll] run_fn fehlgeschlagen für {item.job_id}: {msg}",
+              file=sys.stderr)
+        if out_payload is not None:
+            out_payload["error"] = msg
         return 1
 
 
@@ -154,7 +168,7 @@ def tick(source, run_fn=None, *, max_rounds: int = 4,
     payload: dict = {}
     try:
         rc = process_item(item, run_fn=run_fn, max_rounds=max_rounds,
-                           round_timeout=round_timeout)
+                           round_timeout=round_timeout, out_payload=payload)
     finally:
         try:
             source.publish_result(item, rc, result_payload=payload or None,
