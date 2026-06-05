@@ -17,6 +17,20 @@ ist austauschbar, ohne eine Zeile hier zu ändern.
 Dual-runnable:
     python -m pytest scripts/test_bridge_notify.py
     python bridge_notify.py [--dry-run] [--digest] [--reconcile]
+
+CLI-Exit-Codes (main()), für die Trigger-Auswertung durch einen Scheduler:
+
+    Code | Bedeutung
+    ---- | ---------------------------------------------------------------
+       0 | ok / nichts zu tun — Versand lief (oder --dry-run/--reconcile),
+         | keine Fehler. Auch wenn 0 neue Eskalationen anstanden.
+       2 | nicht konfiguriert — TELEGRAM_TOKEN/TELEGRAM_CHAT_ID (bzw.
+         | DUAL_BRIDGE_TG_TOKEN/DUAL_BRIDGE_TG_CHAT) fehlen; kein Versand.
+       3 | Versandfehler — mindestens eine Telegram-Nachricht schlug fehl
+         | (oder --digest fand nichts zu senden). Kandidat für Retry/Alert.
+
+Ein Scheduler kann also 0 als Erfolg werten, 2 als Fehlkonfiguration
+(einmalig melden, nicht retrien) und 3 als transienten Fehler (retry-fähig).
 """
 from __future__ import annotations
 
