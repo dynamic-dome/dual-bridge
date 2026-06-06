@@ -620,6 +620,56 @@ def test_real_run_fn_stream_true_timeout_killt_und_wirft():
     assert fake.killed is True            # Prozess wurde beendet
 
 
+# --- Mojibake-Regress (2026-06-06): loop_driver gibt UTF-8 aus; ohne explizites
+#     encoding="utf-8" dekodiert text=True auf Windows mit CP1252 -> ein em-dash
+#     (—, UTF-8 E2 80 94) wird zu "â€"" und landet doppelt-kodiert im DCO-Verdikt.
+
+def test_real_run_fn_stream_false_dekodiert_utf8():
+    """stream=False: subprocess.run wird mit encoding='utf-8' aufgerufen."""
+    _fresh()
+    _, _, jp = _reload()
+    calls = {}
+
+    def fake_run(cmd, **kw):
+        calls["kw"] = kw
+        return _FakeCompleted(0, "ok", "")
+
+    orig = jp.subprocess.run
+    jp.subprocess.run = fake_run
+    try:
+        jp._real_run_fn(repo="https://x/y", seed="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                        adapter="codex", max_rounds=2, round_timeout=30)
+    finally:
+        jp.subprocess.run = orig
+    assert calls["kw"].get("encoding") == "utf-8", (
+        "subprocess.run muss UTF-8 dekodieren — sonst CP1252-Mojibake auf Windows"
+    )
+
+
+def test_real_run_fn_stream_true_dekodiert_utf8():
+    """stream=True: subprocess.Popen wird mit encoding='utf-8' aufgerufen."""
+    _fresh()
+    _, _, jp = _reload()
+    calls = {}
+    fake = _FakePopen(out_lines=["ok\n"], err_lines=[])
+
+    def fake_popen(*a, **k):
+        calls["kw"] = k
+        return fake
+
+    orig = jp.subprocess.Popen
+    jp.subprocess.Popen = fake_popen
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            jp._real_run_fn(repo="https://x/y", seed="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                            adapter="codex", max_rounds=1, round_timeout=30, stream=True)
+    finally:
+        jp.subprocess.Popen = orig
+    assert calls["kw"].get("encoding") == "utf-8", (
+        "subprocess.Popen muss UTF-8 dekodieren — sonst CP1252-Mojibake auf Windows"
+    )
+
+
 def test_main_stream_flag_reicht_stream_durch():
     """--stream setzt stream=True durch die ganze Kette bis run_fn."""
     _fresh()

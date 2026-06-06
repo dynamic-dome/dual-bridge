@@ -176,7 +176,12 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         proc = subprocess.run(
             cmd, cwd=str(Path(__file__).parent),
             env=bc.safe_subprocess_env(),
-            capture_output=True, text=True, timeout=cap,
+            # loop_driver emits UTF-8 (em-dash etc.). Without an explicit
+            # encoding, text=True decodes with the Windows locale (CP1252) and
+            # mangles "—" into "â€"" — which then lands double-encoded in the
+            # DCO verdict. errors="replace" keeps a single bad byte from crashing.
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=cap,
         )
         return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
                 "stderr": proc.stderr[-2000:]}
@@ -187,7 +192,8 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         cmd, cwd=str(Path(__file__).parent),
         env=bc.safe_subprocess_env(),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, bufsize=1,
+        # Same UTF-8 pin as the stream=False path above (Windows CP1252 mojibake).
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
     )
     out_lines: list[str] = []
     err_lines: list[str] = []

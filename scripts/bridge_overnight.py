@@ -126,7 +126,10 @@ def _real_run_fn(*, seed_file: Path, seed_text: str, goal: str, repo: str,
     proc = subprocess.run(
         cmd, cwd=str(Path(__file__).parent),
         env=bc.safe_subprocess_env(),
-        capture_output=True, text=True, timeout=cap,
+        # UTF-8 pin (mirrors job_poll._real_run_fn): without it text=True decodes
+        # loop_driver's output with the Windows locale (CP1252) and mangles "—".
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=cap,
     )
     return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
             "stderr": proc.stderr[-2000:]}

@@ -9,6 +9,16 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Behoben
+- **Mojibake im Result-/Verdikt-Text behoben (`scripts/job_poll.py` +
+  `scripts/bridge_overnight.py`, 2026-06-06):** `_real_run_fn` rief
+  `subprocess.run`/`Popen` mit `text=True`, aber ohne `encoding="utf-8"` auf.
+  `loop_driver` gibt UTF-8 aus (z.B. den em-dash `—` = `E2 80 94`); ohne
+  expliziten Encoding-Pin dekodiert `text=True` auf Windows mit der Locale
+  (CP1252) zu `â€"`. Dieser Text ging als JSON an den DCO und erschien dort
+  doppelt-kodiert im Verdikt (`ESKALIERT (stagnation) â€" siehe …`). Fix: beide
+  Subprozess-Aufrufe in beiden Modulen mit `encoding="utf-8", errors="replace"`.
+  3 Regressionstests (job_poll: run + Popen, bridge_overnight: run). Greift fuer
+  alle neuen Jobs; bestehende DB-Verdikte bleiben unveraendert. (CLAUDE.md §10)
 - **Reviewer-Watchdog Default-Endpoint korrigiert (`scripts/register_watchdog.ps1`,
   2026-06-04, live gefunden):** Der Default-Endpoint war faelschlich
   `codex@laptop-b`. Der Reviewer-Knoten laeuft aber auf Laptop A und muss aus der

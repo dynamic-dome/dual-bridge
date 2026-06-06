@@ -371,6 +371,36 @@ def main() -> int:
     return 1 if failed else 0
 
 
+# --- Mojibake-Regress (2026-06-06): mirror of job_poll — _real_run_fn must
+#     decode loop_driver's UTF-8 output explicitly, else CP1252 on Windows.
+
+class _FakeCompleted:
+    def __init__(self, rc, out, err):
+        self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+def test_real_run_fn_dekodiert_utf8():
+    """_real_run_fn ruft subprocess.run mit encoding='utf-8' auf."""
+    _fresh()
+    _, _, _, bo = _reload()
+    calls = {}
+
+    def fake_run(cmd, **kw):
+        calls["kw"] = kw
+        return _FakeCompleted(0, "ok", "")
+
+    orig = bo.subprocess.run
+    bo.subprocess.run = fake_run
+    try:
+        bo._real_run_fn(seed_file=Path("x.md"), seed_text="## Ziel\nZ\n\n## Done-Kriterien\n- ok",
+                        goal="Z", repo="https://x/y", max_rounds=1, round_timeout=30)
+    finally:
+        bo.subprocess.run = orig
+    assert calls["kw"].get("encoding") == "utf-8", (
+        "subprocess.run muss UTF-8 dekodieren — sonst CP1252-Mojibake auf Windows"
+    )
+
+
 if __name__ == "__main__":
     try:
         import sys
