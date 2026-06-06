@@ -842,10 +842,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adapter", default="increment",
                         choices=["echo", "increment", "codex", "claude"],
                         help="Runner both sides use per round.")
-    parser.add_argument("--round-timeout", type=int, default=300,
-                        help="Max seconds to wait for B's result per round.")
-    parser.add_argument("--interval", type=float, default=5.0,
-                        help="Poll interval seconds while waiting for a result.")
+    # Default None -> resolved via config_value() after parse so the precedence
+    # chain CLI flag > env > config.json > hardcoded fallback holds. An explicit
+    # flag is non-None and wins; omitting it consults config.json then 300/5.0.
+    parser.add_argument("--round-timeout", type=int, default=None,
+                        help="Max seconds to wait for B's result per round "
+                             "(default: config.json round_timeout / env "
+                             "DUAL_BRIDGE_ROUND_TIMEOUT / 300).")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="Poll interval seconds while waiting for a result "
+                             "(default: config.json poll_interval / env "
+                             "DUAL_BRIDGE_POLL_INTERVAL / 5.0).")
     parser.add_argument("--mode", default="ping-pong",
                         choices=["ping-pong", "build-review", "goal-loop"],
                         help="ping-pong (Stage 1), build-review (Stage 2b), "
@@ -858,6 +865,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="goal-loop: resume an escalated loop by loop_id "
                              "(reuses the loop branch).")
     args = parser.parse_args(argv)
+
+    # Resolve config-backed defaults (CLI flag wins if given; else env ->
+    # config.json -> hardcoded fallback). See bridge_common.config_value.
+    if args.round_timeout is None:
+        args.round_timeout = bc.config_value(
+            "round_timeout", "DUAL_BRIDGE_ROUND_TIMEOUT", 300, cast=int)
+    if args.interval is None:
+        args.interval = bc.config_value(
+            "poll_interval", "DUAL_BRIDGE_POLL_INTERVAL", 5.0, cast=float)
 
     # Argument validation runs BEFORE the lock (Codex-Verifier MINOR 2026-06-03):
     # a user who forgot --repo must get the actionable "--repo" error, not the

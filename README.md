@@ -97,10 +97,46 @@ Neue Task-Dateien triggern dann sofort einen Poll-Durchlauf. Ohne `watchdog`
 bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 `watchdog` zusätzlich der maximale Fallback-Abstand.
 
-## Konfiguration (Env-Vars)
+## Konfiguration
+
+### `config.json` — zentrale Stellschrauben (händisch editierbar)
+
+Die wichtigsten Laufzeit-Werte (Timeouts, Wartedauern, Runden) liegen in
+**`config.json` im Repo-Root** — eine Datei, an EINER Stelle änderbar, ohne
+Code anzufassen und ohne bei jedem Aufruf ein Flag zu tippen.
+
+| Schlüssel | Zweck | Default | Wirkt auf |
+|---|---|---|---|
+| `round_timeout` | Sekunden, die A pro Runde auf B's Ergebnis wartet (**äußere** Schranke) | `600` | `loop_driver`, `bridge_overnight` |
+| `codex_timeout` | Sekunden, die `codex exec` laufen darf, bevor es gekillt wird (**innere** Schranke) | `600` | `codex`-Adapter |
+| `max_rounds` | Default-Rundenzahl (overnight; bei `loop_driver` bleibt `--max-rounds` Pflicht) | `4` | `bridge_overnight` |
+| `poll_interval` | Sekunden zwischen Ergebnis-Pollings, während A auf B wartet | `5.0` | `loop_driver` |
+| `poller_interval` | Sekunden zwischen Poll-Durchläufen des Empfängers (B, watch-Modus) | `15` | `handoff_poll` |
+
+**Präzedenz (oben gewinnt):** explizites CLI-Flag → Env-Var → `config.json` →
+Hardcoded-Fallback. Ein `--round-timeout 1800` schlägt also `config.json`; setzt
+du keinen Flag, gilt der Wert aus `config.json`; fehlt die Datei oder ist sie
+kaputt, greift der Hardcoded-Default (fail-soft, kein Crash). Override-Pfad für
+die Datei: `DUAL_BRIDGE_CONFIG`.
+
+> **Beide Timeout-Schranken zusammen erhöhen.** `round_timeout` (außen) UND
+> `codex_timeout` (innen) greifen gemeinsam — es zählt die **kleinste**. Für
+> große Aufgaben beide in `config.json` anheben (z.B. je `1800`) oder den Seed
+> kleiner schneiden. Hintergrund: Eskalation „codex timeout nach 600s" in Runde 0
+> trotz laufendem Clone (2026-06-06).
+
+### Env-Vars
+
+Env-Vars überschreiben `config.json` (siehe Präzedenz oben) und decken zusätzlich
+Pfade/Secrets ab, die NICHT in `config.json` gehören (Manifest §6: keine Secrets
+in versionierten Dateien). Die Timing-Env-Vars (`DUAL_BRIDGE_ROUND_TIMEOUT`,
+`DUAL_BRIDGE_CODEX_TIMEOUT`, `DUAL_BRIDGE_MAX_ROUNDS`, `DUAL_BRIDGE_POLL_INTERVAL`,
+`DUAL_BRIDGE_POLLER_INTERVAL`) bleiben als Override erhalten — der Normalweg ist
+aber `config.json`.
 
 | Variable | Zweck | Default |
 |---|---|---|
+| `DUAL_BRIDGE_CONFIG` | Pfad zu einer alternativen `config.json` | `<repo-root>/config.json` |
 | `DUAL_BRIDGE_ROOT` | Bridge-Ordner überschreiben (falls Drive-Pfad auf B anders ist) | `G:\Meine Ablage\...\00_INBOX\dual-bridge` |
 | `DUAL_BRIDGE_ENDPOINT` | Wer bin ich — bestimmt Sende-/Empfangs-Lane (Override; sonst hostname-erkannt) | hostname-erkannt |
 | `DUAL_BRIDGE_DEVICE` | Geräte-Label in Claim/Result | `%COMPUTERNAME%` |

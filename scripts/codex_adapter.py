@@ -173,7 +173,7 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
-from bridge_common import safe_subprocess_env
+from bridge_common import config_value, safe_subprocess_env
 from runners import RunnerResult, register_runner
 
 CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
@@ -804,7 +804,8 @@ def _codex_runner(auftrag: str, fm: dict, workroot):
         task_id=task_id,
         workroot=wr,
         codex_bin=os.environ.get("DUAL_BRIDGE_CODEX_BIN") or None,
-        timeout=int(os.environ.get("DUAL_BRIDGE_CODEX_TIMEOUT", "600")),
+        timeout=config_value(
+            "codex_timeout", "DUAL_BRIDGE_CODEX_TIMEOUT", 600, cast=int),
         branch=fm.get("branch"),
         workdir_name=fm.get("workdir_name"),
     )

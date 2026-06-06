@@ -237,10 +237,13 @@ def _parse_args(argv):
                         f"{DEFAULT_QUEUE}).")
     p.add_argument("--repo", default="",
                    help="Repo-URL für alle Seeds (verpflichtend bei nicht-leerer Queue).")
-    p.add_argument("--max-rounds", type=int, default=4,
-                   help="An loop_driver durchgereicht (Default 4).")
-    p.add_argument("--round-timeout", type=int, default=600,
-                   help="An loop_driver durchgereicht (Sekunden, Default 600).")
+    p.add_argument("--max-rounds", type=int, default=None,
+                   help="An loop_driver durchgereicht (Default: config.json "
+                        "max_rounds / env DUAL_BRIDGE_MAX_ROUNDS / 4).")
+    p.add_argument("--round-timeout", type=int, default=None,
+                   help="An loop_driver durchgereicht (Sekunden; Default: "
+                        "config.json round_timeout / env "
+                        "DUAL_BRIDGE_ROUND_TIMEOUT / 600).")
     p.add_argument("--dry-run", action="store_true",
                    help="Nur die Queue + geplante Läufe zeigen; nichts starten/senden/schreiben.")
     p.add_argument("--no-notify", action="store_true",
@@ -253,6 +256,15 @@ def main(argv=None, *, run_fn=None, send_fn=None) -> int:
     2=Fehlkonfiguration (nicht-leere Queue ohne --repo), 1=unerwarteter Abbruch."""
     bc.ensure_utf8_runtime()
     args = _parse_args(argv)
+    # Config-backed Defaults auflösen (CLI-Flag gewinnt, sonst env -> config.json
+    # -> Hardcoded-Fallback). Hinweis: round_timeout teilt sich denselben Schlüssel
+    # wie loop_driver, max_rounds ist overnight-spezifisch (Default 600/4 hier).
+    if args.round_timeout is None:
+        args.round_timeout = bc.config_value(
+            "round_timeout", "DUAL_BRIDGE_ROUND_TIMEOUT", 600, cast=int)
+    if args.max_rounds is None:
+        args.max_rounds = bc.config_value(
+            "max_rounds", "DUAL_BRIDGE_MAX_ROUNDS", 4, cast=int)
     # Default repo-relativ (CWD-unabhängig); ein explizites --queue gewinnt.
     queue_dir = Path(args.queue) if args.queue else default_queue_dir()
     seeds = discover_seeds(queue_dir)

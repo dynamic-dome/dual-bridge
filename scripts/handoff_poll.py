@@ -365,9 +365,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Poll + echo bridge tasks (Laptop B).")
     parser.add_argument("--watch", action="store_true", help="Loop forever.")
     parser.add_argument(
-        "--interval", type=int, default=15, help="Poll interval seconds (watch mode)."
+        "--interval", type=int, default=None,
+        help="Poll interval seconds (watch mode). Default: config.json "
+             "poller_interval / env DUAL_BRIDGE_POLLER_INTERVAL / 15."
     )
     args = parser.parse_args(argv)
+    if args.interval is None:
+        args.interval = bc.config_value(
+            "poller_interval", "DUAL_BRIDGE_POLLER_INTERVAL", 15, cast=int)
 
     if not bc.acquire_singleton_lock(must_match="handoff_poll"):
         print("[B] Ein Poller läuft bereits (Lock gehalten) — ich beende mich.")

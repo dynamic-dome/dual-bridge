@@ -104,6 +104,14 @@ def _isolate_dual_bridge_state(tmp_path_factory):
     # lane and they fail spuriously (Wiki-TODO P2). A test that needs the other
     # endpoint still overrides DUAL_BRIDGE_ENDPOINT itself.
     os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
+    # Isolate config.json too. The repo now ships a real config.json at the repo
+    # root, and bridge_common.default_config_path() points there by default. A
+    # test asserting a hardcoded fallback (e.g. round_timeout 300) would instead
+    # pick up the shipped file's value and break — and an edit to config.json
+    # would silently flip suite behaviour. Point DUAL_BRIDGE_CONFIG at a
+    # non-existent tmp path so config_value() falls through to its fallbacks.
+    # test_bridge_config.py overrides this itself to point at a controlled file.
+    os.environ["DUAL_BRIDGE_CONFIG"] = str(default_root / "no-config.json")
     _ensure_runners_registered()
     try:
         yield

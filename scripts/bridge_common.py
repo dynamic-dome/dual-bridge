@@ -125,6 +125,83 @@ def bridge_root() -> Path:
     return root
 
 
+# --- Central config.json (single editable source of truth for tunables) -----
+# All the bridge's tunable knobs (timeouts, intervals, max-rounds, schedule
+# defaults) are read through config_value(), which applies a strict precedence
+# chain so the user can change behaviour by editing ONE file:
+#
+#     explicit CLI arg  >  env var  >  config.json  >  hardcoded fallback
+#
+# CLI args sit above this function (they pass the value straight into the
+# function parameter and never reach config_value). config.json lives at the
+# repo root (next to README.md), is plain JSON (no deps), and is OPTIONAL:
+# a missing or malformed file fails soft to {} so the bridge never crashes on a
+# typo in a config the user is hand-editing.
+import json as _json
+
+_config_cache: dict | None = None
+_config_cache_path: str | None = None
+
+
+def default_config_path() -> Path:
+    """Path to config.json. Honors DUAL_BRIDGE_CONFIG override (used by tests and
+    for pointing at an alternate config), else <repo-root>/config.json — the repo
+    root is the parent of this scripts/ directory."""
+    override = os.environ.get("DUAL_BRIDGE_CONFIG")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent.parent / "config.json"
+
+
+def bridge_config(use_cache: bool = True) -> dict:
+    """Load and return config.json as a dict (flat key -> value).
+
+    Fail-soft: a missing file or invalid JSON returns {} rather than raising —
+    the config is user-hand-edited, so a typo must degrade to hardcoded
+    fallbacks, not break the bridge. Cached per resolved path; pass
+    use_cache=False to force a fresh read after editing the file in a long-lived
+    process (the manual-edit-and-reload path)."""
+    global _config_cache, _config_cache_path
+    path = default_config_path()
+    key = str(path)
+    if use_cache and _config_cache is not None and _config_cache_path == key:
+        return _config_cache
+    try:
+        data = _json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    _config_cache = data
+    _config_cache_path = key
+    return data
+
+
+def config_value(key: str, env_var: str | None, fallback, cast=str):
+    """Resolve a tunable via the precedence chain env > config.json > fallback.
+
+    - ``env_var``: the DUAL_BRIDGE_* override name, or None if the knob has no
+      env override.
+    - ``cast``: applied to env and config values (e.g. int). A value that fails
+      to cast is treated as absent and the next rung is tried, ending at the
+      already-typed ``fallback`` — a garbage hand-edit degrades, never crashes.
+    """
+    if env_var is not None:
+        raw = os.environ.get(env_var)
+        if raw is not None and raw != "":
+            try:
+                return cast(raw)
+            except (TypeError, ValueError):
+                pass  # fall through to config.json
+    cfg = bridge_config()
+    if key in cfg:
+        try:
+            return cast(cfg[key])
+        except (TypeError, ValueError):
+            pass  # fall through to fallback
+    return fallback
+
+
 # --- Endpoints & lanes -------------------------------------------------------
 # Two endpoints, one human -> a static dict is enough (no config file/YAML).
 # Each endpoint sends into the outbox of its OUTGOING lane and polls the outbox
