@@ -91,4 +91,5 @@ Singleton-Lock verhindert Doppelstart/Doppel-Claim. Erst nach erstem manuellem R
 - Scheduled Tasks **nie blind aktivieren** — immer erst `--dry-run`.
 - Windows-Subprocess-Härtung beachten (globale Regel §10): headless `claude -p`
   via stdin, `codex exec` Sandbox-Fallen. Live-Funde in `PICKUP-*.md`.
-- Master-Plan: `~/wiki/wiki/plans/2026-05-30-dual-bridge-master-plan.md`.
+- Plan: `docs/plans/2026-06-02-tier1-quickwins-plan.md` (lokal, aktuell). Ein
+  Wiki-Master-Plan existiert (noch) nicht — kein `~/wiki/.../dual-bridge-*`.
