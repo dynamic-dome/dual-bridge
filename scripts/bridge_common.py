@@ -542,10 +542,16 @@ def _subprocess_run_quiet(cmd: list[str]) -> str:
         return ""
 
 
-def acquire_singleton_lock(lock_path: Path | None = None) -> bool:
+def acquire_singleton_lock(lock_path: Path | None = None,
+                           must_match: str | None = None) -> bool:
     """Try to take the local poller lock. Returns True if acquired (and registers
     an atexit release), False if a LIVE poller already holds it. A stale lock
-    (file present but its pid is dead) is taken over."""
+    (file present but its pid is dead) is taken over.
+
+    must_match: a command-line marker that the lock holder's process must carry
+    to count as live (passed through to _pid_alive). Each poller passes its own
+    script name (e.g. "handoff_poll", "job_poll", "loop_driver") so a recycled
+    foreign pid is correctly seen as stale (L11). None = existence-only (legacy)."""
     lock = lock_path or default_lock_path()
     if lock.exists():
         try:
@@ -553,8 +559,8 @@ def acquire_singleton_lock(lock_path: Path | None = None) -> bool:
             held_pid = int(first)
         except (ValueError, IndexError, OSError):
             held_pid = -1
-        if held_pid != os.getpid() and _pid_alive(held_pid):
-            return False  # a live poller holds it
+        if held_pid != os.getpid() and _pid_alive(held_pid, must_match=must_match):
+            return False  # a live poller (verified by cmdline) holds it
         # else: stale (dead pid) or our own -- fall through and (re)take it
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)

@@ -430,7 +430,7 @@ def main(argv=None, *, tick_fn=None, sleep_fn=None, source_override=None) -> int
     # Singleton-Lock nur im echten Lauf (nicht bei injiziertem Test-tick/Source).
     if tick_fn is None and source_override is None:
         lock = _jobpoll_lock_path()
-        if not bc.acquire_singleton_lock(lock):
+        if not bc.acquire_singleton_lock(lock, must_match="job_poll"):
             print("[job_poll] Ein job_poll läuft bereits — Abbruch.", file=sys.stderr)
             return 2
 

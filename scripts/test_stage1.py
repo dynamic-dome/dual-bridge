@@ -287,22 +287,40 @@ def test_singleton_lock() -> None:
     assert lock.exists()
     assert str(os.getpid()) in lock.read_text(encoding="utf-8")
 
-    # The real protection: a DIFFERENT live process holds the lock -> refused.
-    # getppid() is a foreign (!= ours), guaranteed-alive pid during the test.
+    # The real protection: a DIFFERENT live process whose cmdline IS our poller
+    # holds the lock -> refused. getppid() is a foreign guaranteed-alive pid; we
+    # force its cmdline to match the marker (the real parent is pytest, not a
+    # poller -- without the marker check it would now correctly be seen as stale).
     foreign_live = os.getppid()
     assert foreign_live != os.getpid()
     lock.write_text(f"{foreign_live}\n2026-01-01T00:00:00\n", encoding="utf-8")
-    assert bc.acquire_singleton_lock(lock) is False, \
-        "lock held by a foreign live process must refuse acquire"
+    orig_cmdline = bc._pid_cmdline
+    bc._pid_cmdline = lambda pid: "python handoff_poll.py --watch"
+    try:
+        assert bc.acquire_singleton_lock(lock, must_match="handoff_poll") is False, \
+            "lock held by a foreign live poller must refuse acquire"
+    finally:
+        bc._pid_cmdline = orig_cmdline
+
+    # A foreign live process that is NOT our poller (recycled pid) -> taken over.
+    # This is the L11 stale-PID fix: existence alone no longer blocks.
+    lock.write_text(f"{foreign_live}\n2026-01-01T00:00:00\n", encoding="utf-8")
+    bc._pid_cmdline = lambda pid: "svchost.exe -k netsvcs"
+    try:
+        assert bc.acquire_singleton_lock(lock, must_match="handoff_poll") is True, \
+            "lock held by a foreign NON-poller (recycled pid) must be taken over"
+    finally:
+        bc._pid_cmdline = orig_cmdline
 
     # Stale lock (dead pid) -> taken over.
     lock.write_text("999999999\n2026-01-01T00:00:00\n", encoding="utf-8")
-    assert bc.acquire_singleton_lock(lock) is True, "stale lock must be taken over"
+    assert bc.acquire_singleton_lock(lock, must_match="handoff_poll") is True, \
+        "stale lock must be taken over"
 
     # Release removes it (it is now ours again).
     bc.release_singleton_lock(lock)
     assert not lock.exists()
-    print("  lock OK -- acquire/refuse-foreign-live/take-stale/release")
+    print("  lock OK -- acquire/refuse-foreign-poller/take-recycled/take-stale/release")
 
 
 def test_poll_routes_implement_to_codex() -> None:

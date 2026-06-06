@@ -876,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
     # Singleton: one loop driver per machine (reuses the poller lock pattern,
     # local lock file, never the Drive root). Uses a loop-specific lock name.
     lock = bc.default_lock_path().with_name("dual-bridge-loop.lock")
-    if not bc.acquire_singleton_lock(lock):
+    if not bc.acquire_singleton_lock(lock, must_match="loop_driver"):
         print("[A] Ein Loop-Treiber laeuft bereits -- ich beende mich.")
         return 0
 

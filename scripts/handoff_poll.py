@@ -369,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not bc.acquire_singleton_lock():
+    if not bc.acquire_singleton_lock(must_match="handoff_poll"):
         print("[B] Ein Poller läuft bereits (Lock gehalten) — ich beende mich.")
         return 0
 

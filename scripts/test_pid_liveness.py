@@ -49,3 +49,25 @@ def test_marker_required_but_pid_dead_is_not_alive(monkeypatch):
     monkeypatch.setattr(bc, "_pid_exists", lambda pid: False)
     monkeypatch.setattr(bc, "_pid_cmdline", lambda pid: "handoff_poll")
     assert bc._pid_alive(1234, must_match="handoff_poll") is False
+
+
+def test_lock_taken_over_when_holder_is_recycled_pid(tmp_path, monkeypatch):
+    """A lockfile holding a live-but-foreign pid (recycled) must be taken over,
+    not block a restart -- the exact 06-05 stale-lock incident."""
+    lock = tmp_path / "poller.lock"
+    lock.write_text("999999\n2026-06-05T22:01:00\n", encoding="utf-8")
+    # 999999 'exists' (recycled) but its cmdline is NOT our poller.
+    monkeypatch.setattr(bc, "_pid_exists", lambda pid: True)
+    monkeypatch.setattr(bc, "_pid_cmdline", lambda pid: "svchost.exe -k netsvcs")
+    assert bc.acquire_singleton_lock(lock, must_match="handoff_poll") is True
+    # Lock now carries OUR pid.
+    assert lock.read_text(encoding="utf-8").splitlines()[0].strip() == str(os.getpid())
+
+
+def test_lock_blocked_when_real_poller_holds_it(tmp_path, monkeypatch):
+    lock = tmp_path / "poller.lock"
+    lock.write_text("888888\n2026-06-06T19:00:00\n", encoding="utf-8")
+    monkeypatch.setattr(bc, "_pid_exists", lambda pid: True)
+    monkeypatch.setattr(bc, "_pid_cmdline",
+                        lambda pid: r"python handoff_poll.py --watch")
+    assert bc.acquire_singleton_lock(lock, must_match="handoff_poll") is False

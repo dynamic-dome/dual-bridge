@@ -230,12 +230,12 @@ def test_scan_liveness_live_and_dead(monkeypatch=None) -> None:
 
     # live pid
     orig = bc._pid_alive
-    bc._pid_alive = lambda pid: pid == 4242
+    bc._pid_alive = lambda pid, must_match=None: pid == 4242
     try:
         live = bs.scan_lock(lock, label="poller")
         assert live.running is True and live.pid == 4242, live
         # dead pid
-        bc._pid_alive = lambda pid: False
+        bc._pid_alive = lambda pid, must_match=None: False
         dead = bs.scan_lock(lock, label="poller")
         assert dead.running is False, dead
     finally:

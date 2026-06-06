@@ -494,7 +494,7 @@ def test_main_aborts_when_jobpoll_lock_already_held():
     # 999999999 ist (praktisch sicher) kein lebender PID -> waere STALE und wuerde
     # uebernommen. Wir patchen _pid_alive, damit der Fremd-Lock als LEBEND gilt.
     orig_alive = bc._pid_alive
-    bc._pid_alive = lambda pid: True
+    bc._pid_alive = lambda pid, must_match=None: True
     try:
         rc = jp.main(["--once"])           # tick_fn=None -> echter Lock-Block
     finally:

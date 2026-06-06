@@ -294,9 +294,12 @@ def scan_escalations(state_dir: Path) -> list:
     return out
 
 
-def scan_lock(lock_path: Path, label: str = "poller") -> LivenessStatus:
+def scan_lock(lock_path: Path, label: str = "poller",
+              must_match: str | None = None) -> LivenessStatus:
     """Liveness aus einer Lock-Datei lesen (Format: 'pid\\ntimestamp\\n').
-    Liveness des PID über bc._pid_alive. Mutiert nichts."""
+    Liveness des PID über bc._pid_alive. must_match (z.B. 'handoff_poll') stellt
+    sicher, dass eine recycelte Fremd-PID nicht als laufender Poller gilt (L11).
+    Mutiert nichts."""
     ls = LivenessStatus(label=label)
     try:
         if not lock_path.exists():
@@ -315,7 +318,7 @@ def scan_lock(lock_path: Path, label: str = "poller") -> LivenessStatus:
         ls.timestamp = lines[1].strip()
     if ls.pid > 0:
         try:
-            ls.running = bool(bc._pid_alive(ls.pid))
+            ls.running = bool(bc._pid_alive(ls.pid, must_match=must_match))
         except Exception:  # noqa: BLE001
             ls.running = False
     return ls
@@ -358,7 +361,7 @@ def build_report(lanes: list | None = None, state_dir: Path | None = None) -> Re
     # Liveness: Poller-Lock (lazily, read-only — kein Anlegen).
     try:
         lock = bc.default_lock_path()
-        rep.liveness = [scan_lock(lock, label="poller")]
+        rep.liveness = [scan_lock(lock, label="poller", must_match="handoff_poll")]
     except Exception:  # noqa: BLE001
         rep.liveness = []
 
