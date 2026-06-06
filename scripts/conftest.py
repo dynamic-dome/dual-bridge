@@ -98,6 +98,12 @@ def _isolate_dual_bridge_state(tmp_path_factory):
     # (Cleaned up by the DUAL_BRIDGE_* snapshot/restore in the finally below.)
     lock_dir = tmp_path_factory.mktemp("bridge-lock")
     os.environ["DUAL_BRIDGE_LOCK"] = str(lock_dir / "poller.lock")
+    # Force a deterministic endpoint so the suite never depends on a machine's
+    # persistent `setx DUAL_BRIDGE_ENDPOINT`. Several tests assume the DEFAULT
+    # node (claude@laptop-a -> lane A-to-B); a leaked codex@laptop-b flips the
+    # lane and they fail spuriously (Wiki-TODO P2). A test that needs the other
+    # endpoint still overrides DUAL_BRIDGE_ENDPOINT itself.
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = "claude@laptop-a"
     _ensure_runners_registered()
     try:
         yield
