@@ -192,8 +192,68 @@ def test_resolve_https_credential_token_in_file_not_argv_or_env(monkeypatch):
         wrap = cred.wrapper_path.read_text(encoding="utf-8")
         assert "git_askpass_helper.py" in wrap
         assert "ghp_secrettoken" not in wrap
+        # Haertung: ein-Arg-quoting statt %*/$@ (kein cmd-Metazeichen-Restkanal).
+        import os as _os
+        if _os.name == "nt":
+            assert "%~1" in wrap and "%*" not in wrap
+            assert "setlocal" in wrap
+        else:
+            assert '"$1"' in wrap
     finally:
         cred.cleanup()
+
+
+def test_askpass_helper_username_vs_password_heuristic(tmp_path):
+    """Username-Prompt -> user, Password-Prompt -> token; ein Prompt der BEIDE
+    Woerter nennt faellt auf password (default) zurueck."""
+    import subprocess
+    import sys
+    store = tmp_path / "c.store"
+    store.write_text("https://usr:tok@h\n", encoding="utf-8")
+    env = ca.safe_subprocess_env({"GIT_BRIDGE_CREDFILE": store.as_posix()})
+
+    def ask(prompt):
+        return subprocess.run([sys.executable, str(ca._ASKPASS_HELPER), prompt],
+                              capture_output=True, text=True, env=env).stdout.strip()
+
+    assert ask("Username for 'https://h': ") == "usr"
+    assert ask("Password for 'https://usr@h': ") == "tok"
+    # beide Woerter -> password gewinnt (sonst wuerde der User als Passwort gelten)
+    assert ask("Password for username x: ") == "tok"
+
+
+def test_askpass_helper_missing_file_is_empty(tmp_path):
+    """Fehlende/leere store-Datei -> leere Antwort (git promptet, kein Crash)."""
+    import subprocess
+    import sys
+    env = ca.safe_subprocess_env(
+        {"GIT_BRIDGE_CREDFILE": str(tmp_path / "does-not-exist.store")})
+    r = subprocess.run([sys.executable, str(ca._ASKPASS_HELPER), "Username: "],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_resolve_https_credential_cleans_store_if_wrapper_fails(monkeypatch):
+    """Wirft _write_askpass_wrapper, darf die token-tragende store-Datei NICHT
+    leaken -> leeres _Cred, Datei geloescht."""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+        "protocol=https\nhost=github.com\nusername=bob\npassword=tok\n"))
+    captured = {}
+
+    def boom():
+        # Pfad der store-Datei wird VOR dem Wurf vom Resolver erzeugt; wir koennen
+        # ihn ueber den TEMP-Glob nach dem Aufruf pruefen.
+        raise OSError("disk full")
+    monkeypatch.setattr(ca, "_write_askpass_wrapper", boom)
+
+    import glob
+    import tempfile
+    before = set(glob.glob(tempfile.gettempdir() + "/bridge-cred-*.store"))
+    cred = ca._resolve_https_credential("https://github.com/o/r")
+    after = set(glob.glob(tempfile.gettempdir() + "/bridge-cred-*.store"))
+    assert cred.env == {} and cred.store_path is None
+    assert after == before    # keine neue store-Datei uebrig
 
 
 def test_resolve_https_credential_urlencodes_special_chars(monkeypatch):

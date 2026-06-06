@@ -284,6 +284,12 @@ def _resolve_https_credential(repo: str) -> _Cred:
     # the askpass helper urldecodes them back. Same encoding git itself uses.
     enc = lambda s: urllib.parse.quote(s, safe="")
     line = f"{protocol}://{enc(user)}:{enc(pw)}@{host}\n"
+    # mkstemp creates the file with 0600 already (owner-only) and in the user's
+    # private TEMP. The store + the GIT_BRIDGE_CREDFILE pointer are an ACCEPTED
+    # residual risk: a process that can read this worker's env/TEMP runs as the
+    # same user and could read GCM / the token directly anyway. The file lives
+    # only for the duration of the git calls and is deleted in the caller's
+    # finally, so the window is sub-second.
     fd, name = tempfile.mkstemp(prefix="bridge-cred-", suffix=".store")
     store_path = Path(name)
     try:
@@ -303,7 +309,16 @@ def _resolve_https_credential(repo: str) -> _Cred:
     # secret, only the (fixed) interpreter + helper paths. GIT_BRIDGE_CREDFILE
     # (a path, GIT_-prefixed so it survives the allowlist) tells the helper which
     # store file to read. GIT_TERMINAL_PROMPT=0 stops any interactive fallback.
-    wrapper_path = _write_askpass_wrapper(store_path)
+    # If wrapper generation fails, the store file must not leak (it holds the
+    # token). Clean it up before propagating an empty _Cred.
+    try:
+        wrapper_path = _write_askpass_wrapper()
+    except OSError:
+        try:
+            store_path.unlink()
+        except OSError:
+            pass
+        return _Cred(env={})
     env = {
         "GIT_ASKPASS": str(wrapper_path),
         "GIT_BRIDGE_CREDFILE": store_path.as_posix(),
@@ -312,17 +327,26 @@ def _resolve_https_credential(repo: str) -> _Cred:
     return _Cred(env=env, store_path=store_path, wrapper_path=wrapper_path)
 
 
-def _write_askpass_wrapper(store_path: Path) -> Path:
+def _write_askpass_wrapper() -> Path:
     """Generate a one-call executable wrapper that runs the askpass helper with
-    the current interpreter. Returns its path (cleaned up alongside store_path)."""
+    the current interpreter. Returns its path (cleaned up alongside store_path).
+
+    The wrapper is fixed text built only from sys.executable + this module's
+    helper path -- no caller/credential input flows into it. git exec's it
+    directly (no shell) with exactly one arg (the prompt). On Windows we forward
+    that single arg as quoted `%~1` (NOT `%*`): git already passes the prompt as
+    one argv element, and `%~1` re-quotes it as one token so a prompt containing
+    cmd metacharacters (&, |, >) can never be re-parsed by cmd.exe. (Real ASKPASS
+    invocation is shell-free and the prompt is git-generated, so this is
+    defense-in-depth, not a live hole -- but `%~1` costs nothing.)"""
     helper = _ASKPASS_HELPER.as_posix()
     py = Path(sys.executable).as_posix()
     if os.name == "nt":
         fd, name = tempfile.mkstemp(prefix="bridge-askpass-", suffix=".cmd")
-        body = f'@echo off\r\n"{py}" "{helper}" %*\r\n'
+        body = f'@echo off\r\nsetlocal\r\n"{py}" "{helper}" "%~1"\r\n'
     else:
         fd, name = tempfile.mkstemp(prefix="bridge-askpass-", suffix=".sh")
-        body = f'#!/bin/sh\nexec "{py}" "{helper}" "$@"\n'
+        body = f'#!/bin/sh\nexec "{py}" "{helper}" "$1"\n'
     with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         fh.write(body)
     if os.name != "nt":

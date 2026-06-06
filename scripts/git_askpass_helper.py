@@ -44,14 +44,23 @@ def _read_user_token(path: str) -> tuple[str, str]:
     return urllib.parse.unquote(user_enc), urllib.parse.unquote(token_enc)
 
 
+def _first_line(s: str) -> str:
+    """Defensive: a credential value must be a single line. If a decoded value
+    ever contained a newline it would otherwise spill a second answer line to
+    git. Return only the first line (the value itself is already URL-decoded)."""
+    return s.splitlines()[0] if s else ""
+
+
 def main() -> int:
     prompt = sys.argv[1].lower() if len(sys.argv) > 1 else ""
     user, token = _read_user_token(os.environ.get("GIT_BRIDGE_CREDFILE", ""))
-    # git asks for the username first, then the password; answer the matching one.
-    if "username" in prompt:
-        sys.stdout.write(user + "\n")
-    else:
-        sys.stdout.write(token + "\n")
+    # git's prompt is "Username for '<url>': " or "Password for '<url>': ".
+    # Match "password" explicitly (the password branch is the default), and only
+    # treat it as a username ask when the prompt says "username" but NOT
+    # "password" -- robust against an odd prompt that mentions both.
+    is_username = "username" in prompt and "password" not in prompt
+    answer = user if is_username else token
+    sys.stdout.write(_first_line(answer) + "\n")
     return 0
 
 
