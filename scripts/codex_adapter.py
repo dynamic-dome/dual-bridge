@@ -354,6 +354,45 @@ def _write_askpass_wrapper() -> Path:
     return Path(name)
 
 
+def _remote_default_branch(repo: str, cred: "_Cred") -> str | None:
+    """Return the remote's default branch name (e.g. 'master', 'trunk'), or None.
+
+    `git ls-remote --symref <repo> HEAD` prints a line
+    ``ref: refs/heads/<name>\tHEAD`` naming the remote HEAD's target. We parse the
+    branch out of that. Runs under the same resolved credential so a private repo
+    answers (anonymous HEAD on a private repo is empty -> None, caller keeps the
+    requested branch and lets the clone surface the real auth error)."""
+    ls = _run_git(None, "ls-remote", "--symref", repo, "HEAD", cred=cred)
+    if ls.returncode != 0:
+        return None
+    for line in ls.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("ref:") and line.endswith("HEAD"):
+            ref = line[len("ref:"):].rsplit("HEAD", 1)[0].strip()
+            if ref.startswith("refs/heads/"):
+                return ref[len("refs/heads/"):]
+    return None
+
+
+def _resolve_base_branch(repo: str, base_branch: str, cred: "_Cred") -> str:
+    """Return base_branch if it exists on origin, else the remote's real default.
+
+    The loop defaults base_branch to 'main', but plenty of repos still use
+    'master' (or 'trunk'). Cloning --branch main against a master-only repo dies
+    with the misleading 'Remote branch main not found in upstream origin'
+    (observed 2026-06-06, dynamic-central-orchestrator -> rc=3). We probe the
+    requested branch first; only when it is genuinely absent do we fall back to
+    the remote HEAD's default, so an existing 'main' is never second-guessed and
+    a transient/auth failure does not silently switch branches."""
+    ls = _run_git(None, "ls-remote", "--heads", repo, base_branch, cred=cred)
+    if ls.returncode == 0 and ls.stdout.strip():
+        return base_branch  # requested branch exists -> use it
+    if ls.returncode != 0:
+        return base_branch  # probe failed (auth/transient) -> let clone surface it
+    default = _remote_default_branch(repo, cred)
+    return default or base_branch
+
+
 def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
                        prefer_branch: str | None = None) -> Path:
     """Clone repo@base_branch into workdir (fresh). If workdir exists, fetch and
@@ -625,6 +664,18 @@ def run_codex_task(
 
     # 2. repo reachable?
     workdir = Path(workroot) / (workdir_name or task_id)
+    # Resolve the real base branch BEFORE any git op: the loop defaults to 'main',
+    # but a 'master'/'trunk' repo would otherwise fail every clone/rev-list/diff
+    # (they all reference origin/<base_branch>). One credential resolve here; the
+    # store file is ephemeral and cleaned up in the finally. On a fresh workdir we
+    # can probe the remote; for an existing workdir base_branch is already proven
+    # by the prior round, so skip the probe and avoid a redundant network call.
+    if not (workdir / ".git").exists():
+        _bb_cred = _resolve_https_credential(repo)
+        try:
+            base_branch = _resolve_base_branch(repo, base_branch, _bb_cred)
+        finally:
+            _bb_cred.cleanup()
     try:
         _git_clone_or_pull(repo, base_branch, workdir, prefer_branch=branch)
     except RuntimeError as exc:
