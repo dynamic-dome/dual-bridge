@@ -463,8 +463,8 @@ def default_lock_path() -> Path:
     return Path(tempfile.gettempdir()) / "dual-bridge-poller.lock"
 
 
-def _pid_alive(pid: int) -> bool:
-    """True if a process with `pid` currently exists on this OS."""
+def _pid_exists(pid: int) -> bool:
+    """True if a process with `pid` currently exists on this OS (existence only)."""
     if pid <= 0:
         return False
     if os.name == "nt":
@@ -479,6 +479,46 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True  # exists, owned by someone else
     return True
+
+
+def _pid_cmdline(pid: int) -> str:
+    """Best-effort command line of `pid`, or "" if it can't be determined.
+
+    Windows: tasklist carries no cmdline -> Get-CimInstance Win32_Process. POSIX:
+    /proc/<pid>/cmdline (NUL-separated). An empty return means "unknown" and the
+    caller treats it conservatively (see _pid_alive). Never raises."""
+    if pid <= 0:
+        return ""
+    if os.name == "nt":
+        out = _subprocess_run_quiet([
+            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}')"
+            f".CommandLine",
+        ])
+        return out.strip()
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _pid_alive(pid: int, must_match: str | None = None) -> bool:
+    """True if `pid` is a live process. With must_match, additionally require the
+    process command line to contain that marker (case-insensitive) -- this is the
+    anti-PID-recycling guard (L11): a recycled svchost holding our old pid has a
+    different cmdline and is correctly seen as stale.
+
+    Fail-safe: if the pid exists but its cmdline can't be read (empty), assume
+    alive. Never false-negative a real running poller into a double-claim."""
+    if not _pid_exists(pid):
+        return False
+    if must_match is None:
+        return True
+    cmdline = _pid_cmdline(pid)
+    if not cmdline:
+        return True  # conservative: exists but cmdline unknown -> assume ours
+    return must_match.lower() in cmdline.lower()
 
 
 def _subprocess_run_quiet(cmd: list[str]) -> str:
