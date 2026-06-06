@@ -168,6 +168,9 @@ def _answer_from_json(value: object) -> str:
 import os
 import shutil
 import subprocess
+import tempfile
+import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 
 from bridge_common import safe_subprocess_env
@@ -177,28 +180,56 @@ CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
 
 
 def _run_git(workdir: Path | None, *args: str,
-             cred_args: list[str] | None = None) -> subprocess.CompletedProcess:
+             cred: "_Cred | None" = None) -> subprocess.CompletedProcess:
     """Run a git command, capturing output as utf-8. cwd=workdir if given.
 
-    cred_args (if given) are inserted BEFORE the git subcommand (git's `-c k=v`
-    config flags must precede the verb). They carry an ephemeral credential
-    helper resolved by _https_credential_args -- see that function for why the
-    hardened subprocess env cannot rely on GCM resolving the token itself."""
+    cred (if given) overlays GIT_ASKPASS + GIT_BRIDGE_CREDFILE onto the hardened
+    child env so git answers its own credential prompt from an ephemeral store
+    file -- see _resolve_https_credential for why the hardened subprocess env
+    cannot rely on GCM resolving the token itself, and why we use ASKPASS+file
+    rather than an env-var token or an inline shell helper."""
     cmd = ["git"]
     if workdir is not None:
         cmd += ["-C", str(workdir)]
-    if cred_args:
-        cmd += cred_args
     cmd += list(args)
+    env = safe_subprocess_env(cred.env if cred else None)
     return subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8",
-        stdin=subprocess.DEVNULL, env=safe_subprocess_env(),
+        stdin=subprocess.DEVNULL, env=env,
     )
 
 
-def _https_credential_args(repo: str) -> list[str]:
-    """Resolve an HTTPS remote's credentials in the PARENT and hand them to the
-    child clone as an ephemeral `-c credential.helper=...` config.
+@dataclass
+class _Cred:
+    """Ephemeral credential carrier for a single _git_clone_or_pull invocation.
+
+    `env` is the GIT_ASKPASS + GIT_BRIDGE_CREDFILE overlay for the child git env.
+    `store_path` (if set) is a temp file holding the token; `wrapper_path` is the
+    generated askpass wrapper. BOTH MUST be deleted after the git calls (see
+    _git_clone_or_pull's finally). An empty _Cred (env={}) means "no helper" --
+    local/ssh remotes or unresolved creds."""
+    env: dict
+    store_path: Path | None = None
+    wrapper_path: Path | None = None
+
+    def cleanup(self) -> None:
+        """Delete the token-bearing store file and the askpass wrapper."""
+        for p in (self.store_path, self.wrapper_path):
+            if p is not None:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+
+
+# Resolved once: the GIT_ASKPASS helper sits next to this module.
+_ASKPASS_HELPER = (Path(__file__).resolve().parent / "git_askpass_helper.py")
+
+
+def _resolve_https_credential(repo: str) -> _Cred:
+    """Resolve an HTTPS remote's credentials in the PARENT and feed them to the
+    child git via GIT_ASKPASS pointing at an ephemeral store file (NOT an env-var
+    token, NOT an inline shell helper, NOT a `store --file=` config).
 
     Why this exists: clone/fetch run under safe_subprocess_env() (allowlist-only,
     secret-free by design). On a host where the real credential is in the Windows
@@ -207,37 +238,96 @@ def _https_credential_args(repo: str) -> list[str]:
     request returns an empty ref list, so `git clone --branch main` dies with the
     misleading 'Remote branch main not found in upstream origin' (observed
     2026-06-06, every queued goal-loop -> rc=3). We sidestep that by resolving the
-    token here (the parent's env still reaches GCM normally), then injecting it as
-    an inline helper for exactly this one repo. The token never enters an env var,
-    so safe_subprocess_env stays secret-free.
+    token here (the parent's env still reaches GCM normally) and handing it to the
+    child for exactly this one clone.
 
-    Returns [] for non-HTTPS remotes (local/file/ssh paths -- e.g. the real-git
-    test origins -- authenticate without a helper) or when no credential resolves
-    (let git try its own helpers and surface the real error)."""
+    Why GIT_ASKPASS + a store file (and NOT the alternatives):
+      - env-var token: safe_subprocess_env's denylist kills GIT_PASSWORD/_TOKEN by
+        name, and putting the secret in the environment is exactly what the
+        hardening forbids.
+      - inline `!sh` helper: puts the token on git's COMMAND LINE (ps/tasklist
+        leak) AND interpolates user/pw into a shell string -- a `'` in the
+        password becomes shell injection.
+      - `credential.helper=store --file=<win-path>`: that helper runs via sh
+        (git-bash); a Windows path in --file= is unreadable there, so git falls
+        back to an interactive /dev/tty prompt and dies 'could not read Username'
+        (global rule §10.3).
+    GIT_ASKPASS is exec'd directly by git (no shell), reads the token from a file
+    whose PATH (not the token) travels in an env var, and is Windows-path-safe.
+    The token never touches argv, env, or a shell. The file is chmod 600 and
+    deleted by the caller's finally.
+
+    Returns an empty _Cred for non-HTTPS remotes (local/file/ssh paths -- e.g. the
+    real-git test origins -- authenticate without a helper) or when no credential
+    resolves (let git try its own helpers and surface the real error)."""
     if not repo.lower().startswith("https://"):
-        return []
+        return _Cred(env={})
     fill = subprocess.run(
         ["git", "credential", "fill"],
         input=f"url={repo}\n\n", capture_output=True, text=True,
         encoding="utf-8", env=safe_subprocess_env(),
     )
     if fill.returncode != 0:
-        return []
+        return _Cred(env={})
     creds = {}
     for line in fill.stdout.splitlines():
         if "=" in line:
             k, _, v = line.partition("=")
             creds[k.strip()] = v.strip()
     user, pw = creds.get("username"), creds.get("password")
-    if not user or not pw:
-        return []
-    # Inline helper: echo the resolved fields back to git. `!` marks a shell
-    # command; printf keeps it POSIX/Windows-git-bash safe. Empty helper first
-    # ("") resets any host helper chain so only ours answers.
-    helper = (
-        f"!f() {{ printf '%s\\n' 'username={user}' 'password={pw}'; }}; f"
-    )
-    return ["-c", "credential.helper=", "-c", f"credential.helper={helper}"]
+    protocol = creds.get("protocol", "https")
+    host = creds.get("host")
+    if not user or not pw or not host:
+        return _Cred(env={})
+    # Store line in git's credential-store format. URL-encode user/pw so ':' '@'
+    # '/' or any special char cannot corrupt the line or smuggle a second entry;
+    # the askpass helper urldecodes them back. Same encoding git itself uses.
+    enc = lambda s: urllib.parse.quote(s, safe="")
+    line = f"{protocol}://{enc(user)}:{enc(pw)}@{host}\n"
+    fd, name = tempfile.mkstemp(prefix="bridge-cred-", suffix=".store")
+    store_path = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(line)
+        os.chmod(store_path, 0o600)  # best-effort; on Windows NTFS ACLs differ
+    except Exception:
+        try:
+            store_path.unlink()
+        except OSError:
+            pass
+        return _Cred(env={})
+    # GIT_ASKPASS must be a single executable git can exec with one arg (the
+    # prompt) -- it cannot be "python script.py" (two tokens). We generate a tiny
+    # per-call wrapper (a .cmd on Windows, an sh shebang script elsewhere) that
+    # invokes THIS interpreter on the helper script. The wrapper carries no
+    # secret, only the (fixed) interpreter + helper paths. GIT_BRIDGE_CREDFILE
+    # (a path, GIT_-prefixed so it survives the allowlist) tells the helper which
+    # store file to read. GIT_TERMINAL_PROMPT=0 stops any interactive fallback.
+    wrapper_path = _write_askpass_wrapper(store_path)
+    env = {
+        "GIT_ASKPASS": str(wrapper_path),
+        "GIT_BRIDGE_CREDFILE": store_path.as_posix(),
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    return _Cred(env=env, store_path=store_path, wrapper_path=wrapper_path)
+
+
+def _write_askpass_wrapper(store_path: Path) -> Path:
+    """Generate a one-call executable wrapper that runs the askpass helper with
+    the current interpreter. Returns its path (cleaned up alongside store_path)."""
+    helper = _ASKPASS_HELPER.as_posix()
+    py = Path(sys.executable).as_posix()
+    if os.name == "nt":
+        fd, name = tempfile.mkstemp(prefix="bridge-askpass-", suffix=".cmd")
+        body = f'@echo off\r\n"{py}" "{helper}" %*\r\n'
+    else:
+        fd, name = tempfile.mkstemp(prefix="bridge-askpass-", suffix=".sh")
+        body = f'#!/bin/sh\nexec "{py}" "{helper}" "$@"\n'
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
+    if os.name != "nt":
+        os.chmod(name, 0o700)
+    return Path(name)
 
 
 def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
@@ -247,54 +337,60 @@ def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
     loop continues its own prior work); otherwise reset to base_branch. Raises
     RuntimeError with stderr on failure."""
     workdir.parent.mkdir(parents=True, exist_ok=True)
-    # Resolve HTTPS credentials once in the parent (GCM works here); [] for
-    # local/ssh remotes or when nothing resolves. Reused for every git call that
-    # touches the remote so the hardened child never falls back to anonymous.
-    cred = _https_credential_args(repo)
-    if (workdir / ".git").exists():
-        fetch = _run_git(workdir, "fetch", "origin", cred_args=cred)
-        if fetch.returncode != 0:
-            raise RuntimeError(f"git fetch failed: {fetch.stderr.strip()}")
-        target = base_branch
+    # Resolve HTTPS credentials once in the parent (GCM works here); empty _Cred
+    # for local/ssh remotes or when nothing resolves. Reused for every git call
+    # that touches the remote so the hardened child never falls back to anonymous.
+    # The ephemeral store file (if any) is deleted in the finally below.
+    cred = _resolve_https_credential(repo)
+    try:
+        if (workdir / ".git").exists():
+            fetch = _run_git(workdir, "fetch", "origin", cred=cred)
+            if fetch.returncode != 0:
+                raise RuntimeError(f"git fetch failed: {fetch.stderr.strip()}")
+            target = base_branch
+            if prefer_branch:
+                ls = _run_git(workdir, "ls-remote", "--heads", "origin",
+                              prefer_branch, cred=cred)
+                if ls.returncode == 0 and ls.stdout.strip():
+                    target = prefer_branch
+            for args in (
+                ("checkout", target),
+                ("reset", "--hard", f"origin/{target}"),
+            ):
+                cp = _run_git(workdir, *args)
+                if cp.returncode != 0:
+                    raise RuntimeError(f"git {args[0]} failed: {cp.stderr.strip()}")
+            return workdir
+        # On a FRESH clone, prefer the loop branch if it already exists on origin,
+        # so the OTHER side's prior work continues instead of restarting from
+        # base. This is the ping-pong continuity seam: A built on bridge/<loop_id>
+        # and pushed it; B's workdir is fresh, so without this it would clone base
+        # and silently drop A's commit (the next builder's work must build ON the
+        # handoff, not beside it). The fetch/reset branch above already honoured
+        # prefer_branch for an existing workdir; this closes the same gap for the
+        # first clone.
+        clone_branch = base_branch
         if prefer_branch:
-            ls = _run_git(workdir, "ls-remote", "--heads", "origin", prefer_branch,
-                          cred_args=cred)
+            ls = _run_git(None, "ls-remote", "--heads", repo, prefer_branch,
+                          cred=cred)
             if ls.returncode == 0 and ls.stdout.strip():
-                target = prefer_branch
-        for args in (
-            ("checkout", target),
-            ("reset", "--hard", f"origin/{target}"),
-        ):
-            cp = _run_git(workdir, *args)
-            if cp.returncode != 0:
-                raise RuntimeError(f"git {args[0]} failed: {cp.stderr.strip()}")
+                clone_branch = prefer_branch
+        cp = _run_git(None, "clone", "--branch", clone_branch, repo, str(workdir),
+                      cred=cred)
+        if cp.returncode != 0:
+            raise RuntimeError(_diagnose_clone_failure(
+                repo, clone_branch, cp.stderr.strip(), cred))
+        # Ensure a committer identity exists for later commits (CI-less machine).
+        _run_git(workdir, "config", "user.email", "bridge@laptop-b.local")
+        _run_git(workdir, "config", "user.name", "dual-bridge-worker")
         return workdir
-    # On a FRESH clone, prefer the loop branch if it already exists on origin, so
-    # the OTHER side's prior work continues instead of restarting from base. This
-    # is the ping-pong continuity seam: A built on bridge/<loop_id> and pushed it;
-    # B's workdir is fresh, so without this it would clone base and silently drop
-    # A's commit (the next builder's work must build ON the handoff, not beside
-    # it). The fetch/reset branch above already honoured prefer_branch for an
-    # existing workdir; this closes the same gap for the first clone.
-    clone_branch = base_branch
-    if prefer_branch:
-        ls = _run_git(None, "ls-remote", "--heads", repo, prefer_branch,
-                      cred_args=cred)
-        if ls.returncode == 0 and ls.stdout.strip():
-            clone_branch = prefer_branch
-    cp = _run_git(None, "clone", "--branch", clone_branch, repo, str(workdir),
-                  cred_args=cred)
-    if cp.returncode != 0:
-        raise RuntimeError(_diagnose_clone_failure(
-            repo, clone_branch, cp.stderr.strip(), cred))
-    # Ensure a committer identity exists for later commits (CI-less machine).
-    _run_git(workdir, "config", "user.email", "bridge@laptop-b.local")
-    _run_git(workdir, "config", "user.name", "dual-bridge-worker")
-    return workdir
+    finally:
+        # Token-bearing store file + askpass wrapper must not outlive the git calls.
+        cred.cleanup()
 
 
 def _diagnose_clone_failure(repo: str, clone_branch: str, stderr: str,
-                            cred: list[str]) -> str:
+                            cred: "_Cred") -> str:
     """Turn a raw clone stderr into an actionable message.
 
     Git reports a PRIVATE repo seen anonymously as 'Remote branch <b> not found
@@ -302,12 +398,13 @@ def _diagnose_clone_failure(repo: str, clone_branch: str, stderr: str,
     We re-probe the remote with the same resolved credentials: if the branch IS
     visible, the clone's failure was auth/transient, so we say so instead of
     parroting the misleading 'branch not found' (which sent earlier debugging
-    down the wrong path -- see _https_credential_args). If it is genuinely not
-    visible, we keep git's own wording."""
+    down the wrong path -- see _resolve_https_credential). If it is genuinely not
+    visible, we keep git's own wording. NOTE: cred is the _Cred carrier, never
+    rendered into the message -- the token must not reach a RuntimeError/log."""
     looks_like_missing_branch = "not found in upstream" in stderr.lower()
     if looks_like_missing_branch:
         ls = _run_git(None, "ls-remote", "--heads", repo, clone_branch,
-                      cred_args=cred)
+                      cred=cred)
         if ls.returncode == 0 and ls.stdout.strip():
             hint = ("Branch existiert remote, der Clone bekam ihn aber nicht zu "
                     "sehen -> Auth/Token im Worker-Kontext greift nicht "

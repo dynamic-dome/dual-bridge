@@ -160,43 +160,148 @@ def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
 # --- Auth-Pfad + klarere Clone-Fehler-Diagnose (Fix 2026-06-06: privates Repo
 #     anonym gesehen -> irrefuehrendes 'branch not found' -> rc=3) ----------------
 
-def test_https_credential_args_injects_helper(monkeypatch):
-    """Fuer ein HTTPS-Remote loest _https_credential_args das Token im Parent auf
-    und liefert einen ephemeren `-c credential.helper=...` (Token nie in env)."""
+def _fake_fill(stdout, returncode=0):
+    """Stub fuer `git credential fill` (erstes subprocess.run im resolver)."""
     class _Fill:
-        returncode = 0
-        stdout = "username=bob\npassword=ghp_secrettoken\n"
-        stderr = ""
-    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Fill())
-
-    args = ca._https_credential_args("https://github.com/owner/private-repo")
-    assert args[:2] == ["-c", "credential.helper="]          # reset host chain
-    assert any("credential.helper=" in a and "bob" in a for a in args)
-    assert any("ghp_secrettoken" in a for a in args)
+        pass
+    _Fill.returncode = returncode
+    _Fill.stdout = stdout
+    _Fill.stderr = ""
+    return lambda *a, **k: _Fill()
 
 
-def test_https_credential_args_skips_local_and_ssh():
-    """Lokale/SSH-Remotes brauchen keinen Helper -> []."""
-    assert ca._https_credential_args("C:/tmp/origin.git") == []
-    assert ca._https_credential_args("git@github.com:o/r.git") == []
-    assert ca._https_credential_args("/home/x/origin") == []
+def test_resolve_https_credential_token_in_file_not_argv_or_env(monkeypatch):
+    """HTTPS-Remote -> GIT_ASKPASS + store-Datei. Das Token liegt in der DATEI,
+    NICHT in env-Values (kein Env-Leak) und NICHT auf einer git-Kommandozeile."""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+        "protocol=https\nhost=github.com\nusername=bob\npassword=ghp_secrettoken\n"))
+    cred = ca._resolve_https_credential("https://github.com/owner/private-repo")
+    try:
+        # env traegt nur Pfade/Flags, KEIN Token:
+        assert set(cred.env) == {"GIT_ASKPASS", "GIT_BRIDGE_CREDFILE",
+                                 "GIT_TERMINAL_PROMPT"}
+        assert not any("ghp_secrettoken" in str(v) for v in cred.env.values())
+        assert cred.env["GIT_TERMINAL_PROMPT"] == "0"
+        # Token liegt in der store-Datei im git-store-Format:
+        assert cred.store_path is not None and cred.store_path.exists()
+        assert cred.env["GIT_BRIDGE_CREDFILE"] == cred.store_path.as_posix()
+        content = cred.store_path.read_text(encoding="utf-8")
+        assert content == "https://bob:ghp_secrettoken@github.com\n"
+        # Der askpass-Wrapper existiert und ruft den Helper (kein Token darin):
+        assert cred.wrapper_path is not None and cred.wrapper_path.exists()
+        wrap = cred.wrapper_path.read_text(encoding="utf-8")
+        assert "git_askpass_helper.py" in wrap
+        assert "ghp_secrettoken" not in wrap
+    finally:
+        cred.cleanup()
 
 
-def test_https_credential_args_empty_when_fill_fails(monkeypatch):
-    """Wenn `git credential fill` nichts liefert, kein Helper (git nutzt seine
-    eigene Kette und meldet den echten Fehler)."""
-    class _Fill:
-        returncode = 1
-        stdout = ""
-        stderr = "no credential"
-    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Fill())
-    assert ca._https_credential_args("https://github.com/o/r") == []
+def test_resolve_https_credential_urlencodes_special_chars(monkeypatch):
+    """SECURITY-Regression: Sonderzeichen in user/pw (', :, @, $, Leerzeichen)
+    werden URL-encoded -> KEINE Shell-Injection, KEINE zweite store-Zeile, kein
+    Zerbrechen des Eintrags. (Der fruehere inline-`!sh`-Helper war hier verwundbar.)"""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+        "protocol=https\nhost=h.example\nusername=a'b\npassword=p:w@d$(x) y\n"))
+    cred = ca._resolve_https_credential("https://h.example/o/r")
+    try:
+        content = cred.store_path.read_text(encoding="utf-8")
+        # genau EINE Zeile, alle Sonderzeichen prozent-codiert, kein rohes $( ) ' @ :
+        assert content.count("\n") == 1
+        body = content.split("://", 1)[1].rsplit("@", 1)[0]   # user:pw-Teil
+        assert "'" not in body and "$(" not in body and " " not in body
+        assert "%27" in body            # ' -> %27
+        assert "%24" in body            # $ -> %24
+        assert content.endswith("@h.example\n")
+    finally:
+        cred.cleanup()
+
+
+def test_askpass_helper_roundtrips_special_chars(tmp_path):
+    """Der askpass-Helper dekodiert user/token aus der store-Datei korrekt zurueck
+    und unterscheidet Username- vs Password-Prompt -- ohne Shell (kein Inject).
+
+    NB: KEIN monkeypatch auf subprocess.run -- wir rufen den echten Helper als
+    echten Subprozess auf (ein Patch wuerde den Helper-Lauf selbst kapern)."""
+    import subprocess
+    import sys
+    import urllib.parse
+    # store-Datei direkt im git-store-Format anlegen (wie der Resolver es taete).
+    user = "a'b"
+    token = "p:w@d$(touch %s) y" % (tmp_path / "PWNED")
+    enc = lambda s: urllib.parse.quote(s, safe="")
+    store = tmp_path / "cred.store"
+    store.write_text(f"https://{enc(user)}:{enc(token)}@h.example\n", encoding="utf-8")
+
+    env = ca.safe_subprocess_env({"GIT_BRIDGE_CREDFILE": store.as_posix()})
+    u = subprocess.run([sys.executable, str(ca._ASKPASS_HELPER),
+                        "Username for 'https://h.example': "],
+                       capture_output=True, text=True, env=env)
+    p = subprocess.run([sys.executable, str(ca._ASKPASS_HELPER),
+                        "Password for x: "],
+                       capture_output=True, text=True, env=env)
+    assert u.stdout.strip() == user
+    assert p.stdout.strip() == token
+    # die Shell-Payload im Token wurde NICHT ausgefuehrt:
+    assert not (tmp_path / "PWNED").exists()
+
+
+def test_resolve_https_credential_skips_local_and_ssh():
+    """Lokale/SSH-Remotes brauchen keinen Helper -> leeres _Cred, keine Datei."""
+    for r in ("C:/tmp/origin.git", "git@github.com:o/r.git", "/home/x/origin"):
+        cred = ca._resolve_https_credential(r)
+        assert cred.env == {}
+        assert cred.store_path is None and cred.wrapper_path is None
+
+
+def test_resolve_https_credential_empty_when_fill_fails(monkeypatch):
+    """`git credential fill` rc!=0 -> leeres _Cred (git nutzt seine eigene Kette)."""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill("", returncode=1))
+    cred = ca._resolve_https_credential("https://github.com/o/r")
+    assert cred.env == {} and cred.store_path is None
+
+
+def test_resolve_https_credential_empty_when_no_host(monkeypatch):
+    """Ohne host (oder user/pw) -> leeres _Cred, keine halbe store-Zeile."""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+        "username=bob\npassword=tok\n"))   # kein host
+    cred = ca._resolve_https_credential("https://github.com/o/r")
+    assert cred.env == {} and cred.store_path is None
+
+
+def test_clone_or_pull_deletes_store_and_wrapper(monkeypatch, tmp_path):
+    """Store-Datei UND askpass-Wrapper werden nach den git-Calls geloescht --
+    auch wenn der Clone fehlschlaegt (finally)."""
+    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+        "protocol=https\nhost=github.com\nusername=bob\npassword=tok\n"))
+    seen = {}
+
+    def fake_run_git(wd, *args, cred=None):
+        # store-Datei + Wrapper existieren WAEHREND der git-Calls
+        if cred is not None and cred.store_path is not None:
+            seen["store_during"] = cred.store_path.exists()
+            seen["wrap_during"] = cred.wrapper_path.exists()
+            seen["store"] = cred.store_path
+            seen["wrap"] = cred.wrapper_path
+        class _CP:
+            returncode = 1            # Clone schlaegt fehl
+            stdout = ""
+            stderr = "boom"
+        return _CP()
+    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+
+    workdir = tmp_path / "wd"   # kein .git -> Fresh-Clone-Pfad
+    try:
+        ca._git_clone_or_pull("https://github.com/o/r", "main", workdir)
+    except RuntimeError:
+        pass
+    assert seen.get("store_during") is True and seen.get("wrap_during") is True
+    assert not seen["store"].exists() and not seen["wrap"].exists()  # aufgeraeumt
 
 
 def test_diagnose_clone_failure_flags_auth_when_branch_visible(monkeypatch):
     """'branch not found' + remote-sichtbarer Branch -> AUTH-Diagnose statt
     Parroting des irrefuehrenden git-Texts."""
-    def fake_run_git(wd, *args, **kwargs):
+    def fake_run_git(wd, *args, cred=None):
         class _CP:
             returncode = 0
             stdout = "abc\trefs/heads/main\n"   # Branch IST remote sichtbar
@@ -206,14 +311,15 @@ def test_diagnose_clone_failure_flags_auth_when_branch_visible(monkeypatch):
 
     msg = ca._diagnose_clone_failure(
         "https://github.com/o/r", "main",
-        "fatal: Remote branch main not found in upstream origin", cred=[])
+        "fatal: Remote branch main not found in upstream origin",
+        cred=ca._Cred(env={}))
     assert "AUTH" in msg
     assert "Auth/Token" in msg
 
 
 def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
     """Branch wirklich nicht sichtbar -> git-Wortlaut bleibt erhalten."""
-    def fake_run_git(wd, *args, **kwargs):
+    def fake_run_git(wd, *args, cred=None):
         class _CP:
             returncode = 0
             stdout = ""              # ls-remote leer -> Branch fehlt echt
@@ -222,7 +328,8 @@ def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
     monkeypatch.setattr(ca, "_run_git", fake_run_git)
 
     raw = "fatal: Remote branch nope not found in upstream origin"
-    msg = ca._diagnose_clone_failure("https://github.com/o/r", "nope", raw, cred=[])
+    msg = ca._diagnose_clone_failure("https://github.com/o/r", "nope", raw,
+                                     cred=ca._Cred(env={}))
     assert "AUTH" not in msg
     assert raw in msg
 
@@ -230,5 +337,6 @@ def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
 def test_diagnose_clone_failure_passthrough_for_other_errors():
     """Andere Clone-Fehler (kein 'not found in upstream') unveraendert."""
     raw = "fatal: could not create work tree dir: Permission denied"
-    msg = ca._diagnose_clone_failure("https://github.com/o/r", "main", raw, cred=[])
+    msg = ca._diagnose_clone_failure("https://github.com/o/r", "main", raw,
+                                     cred=ca._Cred(env={}))
     assert msg == f"git clone failed: {raw}"
