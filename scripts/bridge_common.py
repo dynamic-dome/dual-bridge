@@ -145,8 +145,8 @@ DEFAULT_LANE = "A-to-B"  # legacy / Stage-1 direction
 # NOTE: gethostname() returns mixed case ("DoMe-Dynamics") while the Drive claims
 # carry "DOME-DYNAMICS" -> keys are uppercase and matched via host.upper().
 HOSTNAME_TO_ENDPOINT = {
-    "DOME-DYNAMICS":   "codex@laptop-b",
-    "K472HEXXZACKBUU": "claude@laptop-a",
+    "DOME-DYNAMICS":    "codex@laptop-b",
+    "K472HEXXZACKBUUM": "claude@laptop-a",
 }
 
 

@@ -35,7 +35,14 @@ def test_hostname_is_case_insensitive(monkeypatch):
 
 
 def test_hostname_k472_maps_to_laptop_a(monkeypatch):
-    bc = _fresh(monkeypatch, endpoint=None, hostname="K472HEXXZACKBUU")
+    # Real laptop-a hostname is "K472HEXXZackBUUM" (mixed case, trailing M) --
+    # gethostname() returns it as-is; the table key is uppercase + host.upper().
+    bc = _fresh(monkeypatch, endpoint=None, hostname="K472HEXXZackBUUM")
+    assert bc.this_endpoint() == "claude@laptop-a"
+
+
+def test_hostname_k472_uppercase_also_maps(monkeypatch):
+    bc = _fresh(monkeypatch, endpoint=None, hostname="K472HEXXZACKBUUM")
     assert bc.this_endpoint() == "claude@laptop-a"
 
 
