@@ -176,16 +176,68 @@ from runners import RunnerResult, register_runner
 CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
 
 
-def _run_git(workdir: Path | None, *args: str) -> subprocess.CompletedProcess:
-    """Run a git command, capturing output as utf-8. cwd=workdir if given."""
+def _run_git(workdir: Path | None, *args: str,
+             cred_args: list[str] | None = None) -> subprocess.CompletedProcess:
+    """Run a git command, capturing output as utf-8. cwd=workdir if given.
+
+    cred_args (if given) are inserted BEFORE the git subcommand (git's `-c k=v`
+    config flags must precede the verb). They carry an ephemeral credential
+    helper resolved by _https_credential_args -- see that function for why the
+    hardened subprocess env cannot rely on GCM resolving the token itself."""
     cmd = ["git"]
     if workdir is not None:
         cmd += ["-C", str(workdir)]
+    if cred_args:
+        cmd += cred_args
     cmd += list(args)
     return subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8",
         stdin=subprocess.DEVNULL, env=safe_subprocess_env(),
     )
+
+
+def _https_credential_args(repo: str) -> list[str]:
+    """Resolve an HTTPS remote's credentials in the PARENT and hand them to the
+    child clone as an ephemeral `-c credential.helper=...` config.
+
+    Why this exists: clone/fetch run under safe_subprocess_env() (allowlist-only,
+    secret-free by design). On a host where the real credential is in the Windows
+    Credential Manager (GCM), the hardened child can fail to unlock it -- git then
+    silently falls back to ANONYMOUS access. Against a PRIVATE repo that anonymous
+    request returns an empty ref list, so `git clone --branch main` dies with the
+    misleading 'Remote branch main not found in upstream origin' (observed
+    2026-06-06, every queued goal-loop -> rc=3). We sidestep that by resolving the
+    token here (the parent's env still reaches GCM normally), then injecting it as
+    an inline helper for exactly this one repo. The token never enters an env var,
+    so safe_subprocess_env stays secret-free.
+
+    Returns [] for non-HTTPS remotes (local/file/ssh paths -- e.g. the real-git
+    test origins -- authenticate without a helper) or when no credential resolves
+    (let git try its own helpers and surface the real error)."""
+    if not repo.lower().startswith("https://"):
+        return []
+    fill = subprocess.run(
+        ["git", "credential", "fill"],
+        input=f"url={repo}\n\n", capture_output=True, text=True,
+        encoding="utf-8", env=safe_subprocess_env(),
+    )
+    if fill.returncode != 0:
+        return []
+    creds = {}
+    for line in fill.stdout.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            creds[k.strip()] = v.strip()
+    user, pw = creds.get("username"), creds.get("password")
+    if not user or not pw:
+        return []
+    # Inline helper: echo the resolved fields back to git. `!` marks a shell
+    # command; printf keeps it POSIX/Windows-git-bash safe. Empty helper first
+    # ("") resets any host helper chain so only ours answers.
+    helper = (
+        f"!f() {{ printf '%s\\n' 'username={user}' 'password={pw}'; }}; f"
+    )
+    return ["-c", "credential.helper=", "-c", f"credential.helper={helper}"]
 
 
 def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
@@ -195,13 +247,18 @@ def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
     loop continues its own prior work); otherwise reset to base_branch. Raises
     RuntimeError with stderr on failure."""
     workdir.parent.mkdir(parents=True, exist_ok=True)
+    # Resolve HTTPS credentials once in the parent (GCM works here); [] for
+    # local/ssh remotes or when nothing resolves. Reused for every git call that
+    # touches the remote so the hardened child never falls back to anonymous.
+    cred = _https_credential_args(repo)
     if (workdir / ".git").exists():
-        fetch = _run_git(workdir, "fetch", "origin")
+        fetch = _run_git(workdir, "fetch", "origin", cred_args=cred)
         if fetch.returncode != 0:
             raise RuntimeError(f"git fetch failed: {fetch.stderr.strip()}")
         target = base_branch
         if prefer_branch:
-            ls = _run_git(workdir, "ls-remote", "--heads", "origin", prefer_branch)
+            ls = _run_git(workdir, "ls-remote", "--heads", "origin", prefer_branch,
+                          cred_args=cred)
             if ls.returncode == 0 and ls.stdout.strip():
                 target = prefer_branch
         for args in (
@@ -221,16 +278,47 @@ def _git_clone_or_pull(repo: str, base_branch: str, workdir: Path,
     # existing workdir; this closes the same gap for the first clone.
     clone_branch = base_branch
     if prefer_branch:
-        ls = _run_git(None, "ls-remote", "--heads", repo, prefer_branch)
+        ls = _run_git(None, "ls-remote", "--heads", repo, prefer_branch,
+                      cred_args=cred)
         if ls.returncode == 0 and ls.stdout.strip():
             clone_branch = prefer_branch
-    cp = _run_git(None, "clone", "--branch", clone_branch, repo, str(workdir))
+    cp = _run_git(None, "clone", "--branch", clone_branch, repo, str(workdir),
+                  cred_args=cred)
     if cp.returncode != 0:
-        raise RuntimeError(f"git clone failed: {cp.stderr.strip()}")
+        raise RuntimeError(_diagnose_clone_failure(
+            repo, clone_branch, cp.stderr.strip(), cred))
     # Ensure a committer identity exists for later commits (CI-less machine).
     _run_git(workdir, "config", "user.email", "bridge@laptop-b.local")
     _run_git(workdir, "config", "user.name", "dual-bridge-worker")
     return workdir
+
+
+def _diagnose_clone_failure(repo: str, clone_branch: str, stderr: str,
+                            cred: list[str]) -> str:
+    """Turn a raw clone stderr into an actionable message.
+
+    Git reports a PRIVATE repo seen anonymously as 'Remote branch <b> not found
+    in upstream origin' -- the branch is fine, the credential was not applied.
+    We re-probe the remote with the same resolved credentials: if the branch IS
+    visible, the clone's failure was auth/transient, so we say so instead of
+    parroting the misleading 'branch not found' (which sent earlier debugging
+    down the wrong path -- see _https_credential_args). If it is genuinely not
+    visible, we keep git's own wording."""
+    looks_like_missing_branch = "not found in upstream" in stderr.lower()
+    if looks_like_missing_branch:
+        ls = _run_git(None, "ls-remote", "--heads", repo, clone_branch,
+                      cred_args=cred)
+        if ls.returncode == 0 and ls.stdout.strip():
+            hint = ("Branch existiert remote, der Clone bekam ihn aber nicht zu "
+                    "sehen -> Auth/Token im Worker-Kontext greift nicht "
+                    "(anonymer Fallback auf privates Repo). "
+                    "Pruefe `git credential fill` im selben Kontext.")
+            return f"git clone failed (AUTH, nicht fehlender Branch): {hint} -- git: {stderr}"
+        if ls.returncode != 0:
+            return (f"git clone failed: Remote nicht erreichbar/auth "
+                    f"(ls-remote rc={ls.returncode}: {ls.stderr.strip()}) -- "
+                    f"git: {stderr}")
+    return f"git clone failed: {stderr}"
 
 
 def _git_checkout_branch(workdir: Path, branch: str) -> None:
