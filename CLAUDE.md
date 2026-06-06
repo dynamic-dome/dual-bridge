@@ -54,6 +54,9 @@ python loop_driver.py --mode goal-loop --resume <loop_id> --repo <url> --max-rou
 ```
 Modi: `ping-pong` (Stage 1) | `build-review` (Stage 2b) | `goal-loop` (Stage 3).
 Eskaliert (fail-closed) → `state/ESCALATION-<loop_id>.md`.
+**Zwei Timeout-Schranken:** `--round-timeout` (A wartet auf B) UND
+`DUAL_BRIDGE_CODEX_TIMEOUT` (killt `codex exec`, Default 600s). Bei „codex timeout
+nach Ns" beide anheben oder den Seed kleiner schneiden (README §Konfiguration).
 
 ### 3. Overnight-Scheduler (nächtliche Seed-Queue)
 Seeds liegen als `docs/overnight/*.md` (Format: `docs/overnight/README.md`;
@@ -61,7 +64,7 @@ Seeds liegen als `docs/overnight/*.md` (Format: `docs/overnight/README.md`;
 ```bash
 python bridge_overnight.py --dry-run --repo https://github.com/dynamic-dome/dual-bridge   # IMMER zuerst
 # Windows-Task (täglich 02:00) registrieren — erst nach grünem Dry-Run:
-powershell -ExecutionPolicy Bypass -File register_overnight.ps1 -Repo <url> [-At 03:30 -MaxRounds 6 -WakeToRun]
+powershell -ExecutionPolicy Bypass -File register_overnight.ps1 -Repo <url> [-At 03:30 -MaxRounds 6 -RoundTimeout 1800 -CodexTimeout 1800 -WakeToRun]
 # Deaktivieren:
 Unregister-ScheduledTask -TaskName "DualBridgeOvernight" -Confirm:$false
 ```

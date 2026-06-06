@@ -107,7 +107,7 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | `DUAL_BRIDGE_WORKROOT` | Arbeitsverzeichnis für codex/claude-Runner | `~/dual-bridge-work` |
 | `DUAL_BRIDGE_REPO_ALLOWLIST` | codex-Repo-Allowlist, Komma-getrennte fnmatch-Patterns | leer = alle erlaubt |
 | `DUAL_BRIDGE_CODEX_BIN` | Pfad zum `codex`-Binary | auto (`shutil.which`) |
-| `DUAL_BRIDGE_CODEX_TIMEOUT` | codex-Timeout in Sekunden | `600` |
+| `DUAL_BRIDGE_CODEX_TIMEOUT` | Sekunden, die `codex exec` laufen darf, bevor es gekillt wird (→ Fehler „codex timeout nach Ns"). **Innere** Timeout-Schranke — siehe Hinweis unter der Tabelle | `600` |
 | `DUAL_BRIDGE_CLAUDE_BIN` | Pfad zum `claude`-Binary | auto (`shutil.which`) |
 | `TELEGRAM_TOKEN` | Telegram-Bot-Token für den Eskalations-Notifier (mit DCO geteilt) | — |
 | `TELEGRAM_CHAT_ID` | Telegram-Chat-ID, an die der Notifier sendet (mit DCO geteilt) | — |
@@ -117,6 +117,18 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | `DCO_BRIDGE_URL` | Basis-URL des DCO-HTTP-API (nur bei `http`; muss auf `/api` enden; fail-closed wenn leer) | — |
 | `DCO_BRIDGE_TOKEN` | Bearer-Token des Workers für den DCO-Job-Pull | — |
 | `DUAL_BRIDGE_WORKER_TYPE` | Worker-Typ im DCO-Job-Pull | `dual-bridge` |
+
+> **Zwei Timeout-Schranken — gemeinsam erhöhen.** Eine zu große Aufgabe kann am
+> *inneren* `codex exec`-Limit sterben (`DUAL_BRIDGE_CODEX_TIMEOUT`, Default 600s)
+> **obwohl der Clone längst lief** — Symptom: Eskalation „A-build error: codex
+> timeout nach 600s", Runde 0, kein Commit (beobachtet 2026-06-06, DCO-Reminder-Seed).
+> Das *äußere* Limit ist `--round-timeout` (wie lange der loop_driver auf B's
+> Ergebnis wartet). Es greift immer die **kleinste** Schranke, also beide anheben:
+> `$env:DUAL_BRIDGE_CODEX_TIMEOUT="1800"` **und** `--round-timeout 1800`.
+> Für Scheduled Tasks: `register_jobpoll.ps1` / `register_overnight.ps1` haben dafür
+> `-CodexTimeout` + `-RoundTimeout` (ein `setx` in der aufrufenden Shell erreicht
+> den Task-Prozess **nicht** — die Skripte setzen die Var per `cmd /c set` im Task
+> selbst). Alternativer Hebel statt Timeout-Erhöhung: den Seed kleiner schneiden.
 
 Endpoint-Werte: `claude@laptop-a` (sendet A→B, empfängt B→A) oder
 `codex@laptop-b` (sendet B→A, empfängt A→B).

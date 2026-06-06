@@ -42,6 +42,17 @@
   Anderes Poll-Intervall (Sekunden) / Re-Trigger-Takt (Minuten) / Build-Limits:
       powershell -ExecutionPolicy Bypass -File register_jobpoll.ps1 -Interval 30 -IntervalMinutes 5 -MaxRounds 6 -RoundTimeout 1800
 
+  ZWEI Timeout-Schranken (beide muessen passen, sonst greift die kleinste):
+    -RoundTimeout  : wie lange loop_driver auf B's Ergebnis wartet (--round-timeout).
+    -CodexTimeout  : wie lange `codex exec` selbst laufen darf, bevor es gekillt
+                     wird (Env DUAL_BRIDGE_CODEX_TIMEOUT, codex_adapter Default 600).
+                     Eine zu grosse Aufgabe stirbt sonst mit 'codex timeout nach 600s'
+                     OBWOHL der Clone laengst lief (beobachtet 2026-06-06, DCO-Seed).
+                     Default = RoundTimeout, damit beide Schranken konsistent sind;
+                     wird im Task-Kontext per `cmd /c set` gesetzt (ein setx in der
+                     aufrufenden Shell erreicht den Scheduled-Task-Prozess NICHT).
+      powershell -ExecutionPolicy Bypass -File register_jobpoll.ps1 -RoundTimeout 1800 -CodexTimeout 1800
+
   Deaktivieren:
       Unregister-ScheduledTask -TaskName "DualBridgeJobPoll" -Confirm:$false
 #>
@@ -51,8 +62,13 @@ param(
     [int]$IntervalMinutes = 10,
     [int]$MaxRounds = 4,
     [int]$RoundTimeout = 600,
+    [int]$CodexTimeout = 0,
     [switch]$SkipEnvCheck
 )
+
+# Default CodexTimeout to RoundTimeout so the inner (codex exec) and outer
+# (loop_driver wait) limits stay aligned unless the caller overrides it.
+if ($CodexTimeout -le 0) { $CodexTimeout = $RoundTimeout }
 
 $ErrorActionPreference = "Stop"
 $python = (Get-Command python).Source
@@ -95,10 +111,15 @@ if (-not $SkipEnvCheck) {
     Write-Host "Env-Check OK: DUAL_BRIDGE_TRANSPORT=http, DCO_BRIDGE_URL=$env:DCO_BRIDGE_URL, DCO_BRIDGE_TOKEN gesetzt."
 }
 
-$argLine = "`"$jobpoll`" --watch --interval $Interval " +
-           "--max-rounds $MaxRounds --round-timeout $RoundTimeout"
+# Set DUAL_BRIDGE_CODEX_TIMEOUT *inside the task process* via `cmd /c set && ...`.
+# A setx in the registering shell does NOT reach an already-scheduled task; only
+# an env-var the task sets itself (or a persistent setx + a fresh task) is seen by
+# the codex_adapter subprocess. cmd /c keeps it self-contained (no wrapper file).
+$pyArgs = "`"$jobpoll`" --watch --interval $Interval " +
+          "--max-rounds $MaxRounds --round-timeout $RoundTimeout"
+$argLine = "/c set DUAL_BRIDGE_CODEX_TIMEOUT=$CodexTimeout && `"$python`" $pyArgs"
 
-$action = New-ScheduledTaskAction -Execute $python `
+$action = New-ScheduledTaskAction -Execute "cmd.exe" `
     -Argument $argLine -WorkingDirectory $ScriptsDir
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
@@ -112,7 +133,7 @@ Register-ScheduledTask -TaskName "DualBridgeJobPoll" `
     -Description "Builder-Knoten: pollt die DCO-Job-Queue per HTTP alle ${Interval}s und baut per codex (Re-Trigger alle $IntervalMinutes min, Singleton-Lock gegen Doppelstart)." `
     -Force
 
-Write-Host "Builder registriert: DualBridgeJobPoll (Re-Trigger alle $IntervalMinutes min, Poll alle ${Interval}s, max-rounds $MaxRounds)."
+Write-Host "Builder registriert: DualBridgeJobPoll (Re-Trigger alle $IntervalMinutes min, Poll alle ${Interval}s, max-rounds $MaxRounds, round-timeout ${RoundTimeout}s, codex-timeout ${CodexTimeout}s)."
 Write-Host ""
 Write-Host "WICHTIG: Vorher testen mit:  python job_poll.py --once"
 Write-Host "Deaktivieren: Unregister-ScheduledTask -TaskName 'DualBridgeJobPoll' -Confirm:`$false"
