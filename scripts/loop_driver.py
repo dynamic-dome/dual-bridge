@@ -944,7 +944,8 @@ def main(argv: list[str] | None = None) -> int:
         summary = run_goal_loop(
             goal=goal, done_criteria=criteria, repo=args.repo,
             base_branch=args.base_branch, max_rounds=args.max_rounds,
-            round_timeout=args.round_timeout, loop_id=loop_id)
+            round_timeout=args.round_timeout, interval=args.interval,
+            loop_id=loop_id)
         print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
         if summary["accepted"]:
             print(f"    ACCEPTED auf {summary['final_branch']}@"

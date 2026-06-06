@@ -356,6 +356,24 @@ def test_safe_env_drops_oauth_bearer_pat_variants() -> None:
     print("  Q1.2 OK — OAuth/bearer/PAT/bare-KEY Varianten gedroppt")
 
 
+def test_safe_env_dual_bridge_config_reaches_child_but_secrets_dont() -> None:
+    """Codex-Verifier L3 2026-06-07: the DUAL_BRIDGE_ allow-prefix lets the
+    bridge's own config (DUAL_BRIDGE_CONFIG path-override, timing vars) reach a
+    child process — BUT the secret denylist must still strip a secret-smelling
+    DUAL_BRIDGE_* (the Telegram token). Proves the new prefix is not a bypass."""
+    import bridge_common as bc
+    passthrough = ("DUAL_BRIDGE_CONFIG", "DUAL_BRIDGE_CODEX_TIMEOUT",
+                   "DUAL_BRIDGE_ROUND_TIMEOUT", "DUAL_BRIDGE_ENDPOINT")
+    secret = ("DUAL_BRIDGE_TG_TOKEN",)
+    with _env(**{k: "v" for k in (*passthrough, *secret)}):
+        env = bc.safe_subprocess_env()
+    for var in passthrough:
+        assert var in env, f"{var} must reach the child (config inheritance)"
+    for var in secret:
+        assert var not in env, f"{var} leaked despite the secret denylist"
+    print("  L3 OK — DUAL_BRIDGE_ Config erbt, DUAL_BRIDGE_TG_TOKEN gedroppt")
+
+
 def test_safe_env_ssh_auth_sock_survives_secret_denylist() -> None:
     """Regression for the denylist: SSH_AUTH_SOCK contains 'AUTH' but is a
     legitimate transport var and must NOT be killed by the secret filter."""

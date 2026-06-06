@@ -62,7 +62,12 @@ _ALLOW_EXACT = {
 }
 # Case-insensitive prefix match. PATH covers PATH/PATHEXT-casing variants;
 # PYTHON covers PYTHONUTF8/PYTHONPATH/...; GIT_/LANG/LC_ keep git + locale sane.
-_ALLOW_PREFIX = ("PATH", "PYTHON", "GIT_", "LANG", "LC_")
+# DUAL_BRIDGE_ lets the bridge's own config reach child processes (loop_driver,
+# codex_adapter): a DUAL_BRIDGE_CONFIG path-override or DUAL_BRIDGE_CODEX_TIMEOUT
+# set in the parent must be honoured by the subprocess, not silently dropped
+# (Codex-Verifier L3 2026-06-07). The _SECRET_SUBSTR denylist below still strips
+# any secret-smelling DUAL_BRIDGE_* (e.g. DUAL_BRIDGE_TG_TOKEN -> 'TOKEN').
+_ALLOW_PREFIX = ("PATH", "PYTHON", "GIT_", "LANG", "LC_", "DUAL_BRIDGE_")
 # Q1 (Codex-Verifier): the broad prefixes (GIT_, PATH, PYTHON) could let a
 # secret through (e.g. GIT_TOKEN, PATH_SECRET). A final denylist substring pass
 # drops anything that smells like a credential, regardless of how it matched.
@@ -162,7 +167,10 @@ def bridge_config(use_cache: bool = True) -> dict:
     use_cache=False to force a fresh read after editing the file in a long-lived
     process (the manual-edit-and-reload path)."""
     global _config_cache, _config_cache_path
-    path = default_config_path()
+    # Cache key is the *resolved* absolute path so a relative DUAL_BRIDGE_CONFIG
+    # or a cwd change can neither false-miss (same file, two keys) nor false-hit
+    # (two relative paths, one key). (Codex-Verifier L2 2026-06-07.)
+    path = default_config_path().resolve()
     key = str(path)
     if use_cache and _config_cache is not None and _config_cache_path == key:
         return _config_cache

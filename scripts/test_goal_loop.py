@@ -540,6 +540,44 @@ def test_main_goal_loop_arg_validation_before_lock(monkeypatch, tmp_path, capsys
     )
 
 
+def test_main_goal_loop_forwards_resolved_interval(monkeypatch, tmp_path):
+    """Codex-Verifier L4 (2026-06-07): main() resolved args.interval via
+    config_value but did NOT pass it into run_goal_loop -- so poll_interval from
+    config.json/CLI was silently ignored in goal-loop mode (the Stage-3 main
+    path), leaving run_goal_loop's hardcoded interval=5. We point config.json at
+    a controlled file with poll_interval=2, call main() WITHOUT --interval, and
+    assert the spy on run_goal_loop receives interval=2."""
+    import json
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"poll_interval": 2}), encoding="utf-8")
+    monkeypatch.setenv("DUAL_BRIDGE_CONFIG", str(cfg))
+    monkeypatch.delenv("DUAL_BRIDGE_POLL_INTERVAL", raising=False)
+
+    ld = _reload_as_a(monkeypatch, tmp_path)
+
+    captured = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return {
+            "loop_id": "loop-x", "rounds_done": 0, "accepted": False,
+            "escalated": False, "final_branch": "b", "final_commit": "c",
+            "escalation_trigger": None,
+        }
+
+    monkeypatch.setattr(ld, "run_goal_loop", _spy)
+
+    rc = ld.main(["--mode", "goal-loop", "--max-rounds", "2",
+                  "--repo", "https://example.invalid/r.git",
+                  "--seed", "## Ziel\nG\n\n## Done-Kriterien\n- [ ] c\n"])
+    assert rc == 1  # not accepted -> rc 1 (spy returned accepted=False)
+    assert captured.get("interval") == 2, (
+        f"main() did not forward the resolved poll_interval to run_goal_loop "
+        f"(got {captured.get('interval')!r}, expected 2)"
+    )
+
+
 def test_resume_max_rounds_allows_unchanged(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     ld.write_escalation(
