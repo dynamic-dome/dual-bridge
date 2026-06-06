@@ -378,7 +378,13 @@ def test_diagnose_clone_failure_flags_auth_when_branch_visible(monkeypatch):
 
 
 def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
-    """Branch wirklich nicht sichtbar -> git-Wortlaut bleibt erhalten."""
+    """Branch wirklich nicht sichtbar -> kein AUTH, git-Wortlaut bleibt erhalten.
+
+    'Wirklich fehlend' ist nur beweisbar, wenn eine Credential AUFGELOEST war
+    (cred.env nicht leer) und der Re-Probe TROTZDEM leer blieb. Bei leerem
+    cred.env lief der Re-Probe selbst anonym -> Leere beweist nichts und wird
+    jetzt als AUTH gewertet (siehe Folge-Test). Korrigiert die 2026-06-06-
+    Fehldiagnose."""
     def fake_run_git(wd, *args, cred=None):
         class _CP:
             returncode = 0
@@ -389,8 +395,26 @@ def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
 
     raw = "fatal: Remote branch nope not found in upstream origin"
     msg = ca._diagnose_clone_failure("https://github.com/o/r", "nope", raw,
-                                     cred=ca._Cred(env={}))
+                                     cred=ca._Cred(env={"GIT_ASKPASS": "x"}))
     assert "AUTH" not in msg
+    assert raw in msg
+
+
+def test_diagnose_clone_failure_empty_reprobe_without_cred_is_auth(monkeypatch):
+    """Leerer Re-Probe OHNE aufgeloeste Credential -> AUTH, nicht 'Branch fehlt'.
+    Das war die eigentliche 2026-06-06-Ursache (privates Repo, anonymer Clone)."""
+    def fake_run_git(wd, *args, cred=None):
+        class _CP:
+            returncode = 0
+            stdout = ""              # anonymer Re-Probe sieht 0 Refs
+            stderr = ""
+        return _CP()
+    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+
+    raw = "fatal: Remote branch main not found in upstream origin"
+    msg = ca._diagnose_clone_failure("https://github.com/o/r", "main", raw,
+                                     cred=ca._Cred(env={}))
+    assert "AUTH" in msg
     assert raw in msg
 
 

@@ -427,6 +427,12 @@ def _diagnose_clone_failure(repo: str, clone_branch: str, stderr: str,
     rendered into the message -- the token must not reach a RuntimeError/log."""
     looks_like_missing_branch = "not found in upstream" in stderr.lower()
     if looks_like_missing_branch:
+        # An empty _Cred (env={}) means _resolve_https_credential could not
+        # resolve a token in the worker context AT ALL -- so this re-probe runs
+        # just as anonymously as the failed clone did. Surface that up front: it
+        # is the most common cause (observed 2026-06-06, three queued goal-loops
+        # in a row) and the raw 'branch not found' would otherwise mislead again.
+        no_cred = not cred.env
         ls = _run_git(None, "ls-remote", "--heads", repo, clone_branch,
                       cred=cred)
         if ls.returncode == 0 and ls.stdout.strip():
@@ -439,6 +445,23 @@ def _diagnose_clone_failure(repo: str, clone_branch: str, stderr: str,
             return (f"git clone failed: Remote nicht erreichbar/auth "
                     f"(ls-remote rc={ls.returncode}: {ls.stderr.strip()}) -- "
                     f"git: {stderr}")
+        # rc==0 but EMPTY ref list. Either (a) we have no credential, so the
+        # probe is anonymous and a private repo legitimately shows zero refs --
+        # almost certainly auth, not a missing branch; or (b) we DID resolve a
+        # credential yet still see nothing, meaning the branch truly is absent
+        # (or the repo is empty). Distinguish the two so the escalation points at
+        # the right fix instead of parroting git's misleading wording.
+        if no_cred:
+            hint = ("Keine Credential im Worker-Kontext aufloesbar "
+                    "(_resolve_https_credential -> leer), der Re-Probe lief "
+                    "daher ebenfalls anonym und sah 0 Refs. Bei einem PRIVATEN "
+                    "Repo ist das das erwartete Symptom -> Auth, nicht fehlender "
+                    "Branch. Pruefe `git credential fill` im selben (gehaerteten) "
+                    "Kontext.")
+            return f"git clone failed (AUTH, nicht fehlender Branch): {hint} -- git: {stderr}"
+        return (f"git clone failed: Branch {clone_branch!r} remote nicht "
+                f"sichtbar trotz aufgeloester Credential (Repo leer oder Branch "
+                f"existiert wirklich nicht) -- git: {stderr}")
     return f"git clone failed: {stderr}"
 
 

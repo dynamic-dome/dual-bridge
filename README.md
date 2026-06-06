@@ -128,7 +128,7 @@ Rolle oder Agent. `this_endpoint()` löst dreistufig auf:
 
 1. `DUAL_BRIDGE_ENDPOINT` (per `setx`) — expliziter Override, höchster Vorrang.
 2. Hostname-Auto-Erkennung (case-insensitiv): `DOME-DYNAMICS → codex@laptop-b`,
-   `K472HEXXZACKBUU → claude@laptop-a`.
+   `K472HEXXZACKBUUM → claude@laptop-a`.
 3. Unbekannter Host ohne Override → klarer Fehler (kein stilles Raten).
 
 Der `claude@`/`codex@`-Präfix ist kosmetisch; der real laufende Adapter kommt

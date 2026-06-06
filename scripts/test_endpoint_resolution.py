@@ -19,7 +19,7 @@ def _fresh(monkeypatch, *, endpoint=None, hostname=None):
 
 
 def test_override_wins_over_hostname(monkeypatch):
-    bc = _fresh(monkeypatch, endpoint="codex@laptop-b", hostname="K472HEXXZACKBUU")
+    bc = _fresh(monkeypatch, endpoint="codex@laptop-b", hostname="K472HEXXZACKBUUM")
     assert bc.this_endpoint() == "codex@laptop-b"
 
 

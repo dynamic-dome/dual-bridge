@@ -29,7 +29,7 @@ conftest lesen + Snapshot vor/nach. Hintergrund: globale Regel §3.
 
 Alle Befehle aus `scripts/`. **Endpoint = Maschine, hostname-erkannt:**
 `this_endpoint()` leitet die Identität automatisch aus dem Hostname ab
-(`DOME-DYNAMICS→codex@laptop-b`, `K472HEXXZACKBUU→claude@laptop-a`). Override via
+(`DOME-DYNAMICS→codex@laptop-b`, `K472HEXXZACKBUUM→claude@laptop-a`). Override via
 `setx DUAL_BRIDGE_ENDPOINT` bleibt vorrangig; unbekannter Host ohne Override →
 klarer Fehler. Agent/Adapter kommt aus dem Task-Feld `adapter:`, NICHT aus dem
 Endpoint-Namen (der `claude@`/`codex@`-Präfix steuert nichts).
