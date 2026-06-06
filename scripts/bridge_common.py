@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 import itertools as _itertools
 import os
+import socket
 import sys
 import uuid as _uuid
 from pathlib import Path
@@ -136,10 +137,37 @@ ENDPOINTS = {
 }
 DEFAULT_LANE = "A-to-B"  # legacy / Stage-1 direction
 
+# Hostname -> full endpoint string. The endpoint encodes the MACHINE (a/b), which
+# is all that determines lane direction; the claude@/codex@ prefix is cosmetic
+# (the real adapter comes from the task's `adapter:` field). Auto-detecting from
+# the hostname removes the recurring role/agent confusion and the hard
+# claude@laptop-a default that made the suite depend on a machine's setx value.
+# NOTE: gethostname() returns mixed case ("DoMe-Dynamics") while the Drive claims
+# carry "DOME-DYNAMICS" -> keys are uppercase and matched via host.upper().
+HOSTNAME_TO_ENDPOINT = {
+    "DOME-DYNAMICS":   "codex@laptop-b",
+    "K472HEXXZACKBUU": "claude@laptop-a",
+}
+
 
 def this_endpoint() -> str:
-    """Who am I. DUAL_BRIDGE_ENDPOINT overrides; default is the A/Claude node."""
-    return os.environ.get("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    """Who am I. Resolution order: explicit DUAL_BRIDGE_ENDPOINT override ->
+    hostname auto-detection (case-insensitive) -> ValueError naming the host.
+    No silent claude@laptop-a fallback: an unknown host must be configured, not
+    guessed (the wrong-default drift cost real diagnosis time, Wiki-TODO P2)."""
+    override = os.environ.get("DUAL_BRIDGE_ENDPOINT")
+    if override:
+        return override
+    host = socket.gethostname()
+    mapped = HOSTNAME_TO_ENDPOINT.get(host.upper())
+    if mapped:
+        return mapped
+    raise ValueError(
+        f"Unbekannter Host {host!r} und kein DUAL_BRIDGE_ENDPOINT gesetzt. "
+        f"Bekannte Hosts: {', '.join(HOSTNAME_TO_ENDPOINT)}. "
+        f"Setze die Identitaet explizit, z.B.: "
+        f"setx DUAL_BRIDGE_ENDPOINT \"codex@laptop-b\""
+    )
 
 
 def lane_root(lane: str) -> Path:
