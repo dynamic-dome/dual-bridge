@@ -102,7 +102,7 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 | Variable | Zweck | Default |
 |---|---|---|
 | `DUAL_BRIDGE_ROOT` | Bridge-Ordner überschreiben (falls Drive-Pfad auf B anders ist) | `G:\Meine Ablage\...\00_INBOX\dual-bridge` |
-| `DUAL_BRIDGE_ENDPOINT` | Wer bin ich — bestimmt Sende-/Empfangs-Lane | `claude@laptop-a` |
+| `DUAL_BRIDGE_ENDPOINT` | Wer bin ich — bestimmt Sende-/Empfangs-Lane (Override; sonst hostname-erkannt) | hostname-erkannt |
 | `DUAL_BRIDGE_DEVICE` | Geräte-Label in Claim/Result | `%COMPUTERNAME%` |
 | `DUAL_BRIDGE_WORKROOT` | Arbeitsverzeichnis für codex/claude-Runner | `~/dual-bridge-work` |
 | `DUAL_BRIDGE_REPO_ALLOWLIST` | codex-Repo-Allowlist, Komma-getrennte fnmatch-Patterns | leer = alle erlaubt |
@@ -120,6 +120,27 @@ bleibt der Poll-Fallback aktiv; `--interval` ist dann das Poll-Intervall, mit
 
 Endpoint-Werte: `claude@laptop-a` (sendet A→B, empfängt B→A) oder
 `codex@laptop-b` (sendet B→A, empfängt A→B).
+
+### Endpoint-Identität (Maschine, nicht Agent)
+
+Der Endpoint bestimmt die **Lane-Richtung** und hängt an der **Maschine**, nicht an
+Rolle oder Agent. `this_endpoint()` löst dreistufig auf:
+
+1. `DUAL_BRIDGE_ENDPOINT` (per `setx`) — expliziter Override, höchster Vorrang.
+2. Hostname-Auto-Erkennung (case-insensitiv): `DOME-DYNAMICS → codex@laptop-b`,
+   `K472HEXXZACKBUU → claude@laptop-a`.
+3. Unbekannter Host ohne Override → klarer Fehler (kein stilles Raten).
+
+Der `claude@`/`codex@`-Präfix ist kosmetisch; der real laufende Adapter kommt
+ausschließlich aus dem Task-Feld `adapter:`. **Migration:** Bestehende
+`setx DUAL_BRIDGE_ENDPOINT`-Werte bleiben als Override gültig — kein koordinierter
+Umstieg über beide Laptops nötig. Neue Maschine → entweder Hostname in
+`HOSTNAME_TO_ENDPOINT` (`scripts/bridge_common.py`) eintragen oder `setx` setzen.
+
+Die Liveness-Prüfung des Pollers (`_pid_alive`/Singleton-Lock/`bridge_status`)
+verifiziert zusätzlich die Prozess-Cmdline (Marker je Poller: `handoff_poll`/
+`job_poll`/`loop_driver`), damit eine vom OS recycelte Fremd-PID nicht
+fälschlich als laufender Poller gilt (Stale-PID-Schutz).
 
 **Wichtig für Laptop B:** Prüfe zuerst, ob der Google-Drive-Mount denselben
 Laufwerksbuchstaben (`G:`) hat. Falls nicht, setze `DUAL_BRIDGE_ROOT`.
