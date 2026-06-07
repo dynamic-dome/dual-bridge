@@ -35,12 +35,15 @@ Ein Scheduler kann also 0 als Erfolg werten, 2 als Fehlkonfiguration
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import bridge_common as bc
@@ -49,9 +52,56 @@ import bridge_status as bs
 # Sidecar-State des Notifiers (sein EINZIGER Schreib-Ort).
 NOTIFY_DIR_NAME = "_notify"
 SENT_FILE_NAME = "sent.json"
+ATTEMPTS_FILE_NAME = "attempts.json"
 
 # Telegram-API-Timeout (Sekunden) — kurz halten, der Trigger ist ein Ein-Schuss.
 _HTTP_TIMEOUT = 15
+
+# Retry/Backoff-Stellschrauben (später optional nach config.json ziehbar).
+MAX_TRANSIENT_ATTEMPTS = 6      # danach kippt transient -> permanent_failed
+BACKOFF_BASE_SEC = 60          # erster exp-Backoff-Schritt
+BACKOFF_CAP_SEC = 3600         # Deckel für den eigenen exp-Backoff (1 h)
+RETRY_AFTER_CAP_SEC = 3600     # Deckel für den Server-vorgegebenen Retry-After
+
+
+class NotifySendError(Exception):
+    """Typisierter Sendefehler. category: 'PERMANENT' (Retry sinnlos — falscher
+    Token, inhaltliche Ablehnung) | 'TRANSIENT' (später erneut — Rate-Limit,
+    5xx, Netzfehler). retry_after: Sekunden aus dem Header oder None."""
+    def __init__(self, category: str, status: int | None,
+                 retry_after: int | None, message: str):
+        super().__init__(message)
+        self.category = category
+        self.status = status
+        self.retry_after = retry_after
+
+
+def _classify_http_status(status: int) -> str:
+    """429 + 5xx = transient; übrige 4xx = permanent."""
+    if status == 429 or status >= 500:
+        return "TRANSIENT"
+    if 400 <= status < 500:
+        return "PERMANENT"
+    return "TRANSIENT"  # unerwartet -> vorsichtig retrybar
+
+
+def _parse_retry_after(value: str | None) -> int | None:
+    """Retry-After als Sekunden-Integer ODER HTTP-Datum. None wenn unlesbar."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = int((dt - datetime.now(timezone.utc)).total_seconds())
+        return delta if delta > 0 else 0
+    except (TypeError, ValueError):
+        return None
 
 
 # --- Konfiguration -----------------------------------------------------------
@@ -100,23 +150,44 @@ def _save_sent(data: dict) -> None:
 
 
 # --- Telegram-Transport ------------------------------------------------------
-def _post_telegram(text: str) -> None:
-    """Eine Nachricht an Telegram senden. Wirft bei Fehler (Config/HTTP/Netz),
-    damit der Aufrufer die Eskalation NICHT als gesendet markiert."""
+def _post_telegram(text: str,
+                   api_base: str = "https://api.telegram.org/bot{token}/sendMessage") -> None:
+    """Eine Nachricht an Telegram senden. Wirft NotifySendError mit Kategorie
+    (PERMANENT/TRANSIENT) bei Fehler, damit der Aufrufer Retry vs. Aufgeben
+    entscheiden kann. Erfolg = stille Rückkehr.
+
+    api_base ist parametrisiert (Default = Produktiv-URL), damit Tests gegen
+    einen lokalen http.server-Mock laufen können — ohne den Telegram-Pfad zu
+    mocken (echte HTTPError/URLError-Kette, P006)."""
     token, chat = _telegram_config()
     if not (token and chat):
-        raise RuntimeError("Telegram nicht konfiguriert (TELEGRAM_TOKEN/TELEGRAM_CHAT_ID).")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+        raise NotifySendError("PERMANENT", None, None,
+                              "Telegram nicht konfiguriert (TELEGRAM_TOKEN/TELEGRAM_CHAT_ID).")
+    url = api_base.format(token=token)
     payload = urllib.parse.urlencode({
         "chat_id": chat, "text": text, "parse_mode": "Markdown",
         "disable_web_page_preview": "true",
     }).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST")
-    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-    obj = json.loads(body)
+    try:
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        retry_after = _parse_retry_after(exc.headers.get("Retry-After")) if exc.headers else None
+        raise NotifySendError(_classify_http_status(status), status, retry_after,
+                              f"Telegram HTTP {status}") from exc
+    except urllib.error.URLError as exc:
+        raise NotifySendError("TRANSIENT", None, None,
+                              f"Telegram nicht erreichbar: {exc}") from exc
+    try:
+        obj = json.loads(body)
+    except ValueError as exc:
+        raise NotifySendError("TRANSIENT", None, None,
+                              f"Telegram-Antwort nicht parsebar: {body[:120]}") from exc
     if not obj.get("ok"):
-        raise RuntimeError(f"Telegram-API meldete Fehler: {body}")
+        raise NotifySendError("PERMANENT", None, None,
+                              f"Telegram-API lehnt ab: {body[:200]}")
 
 
 # --- Nachrichten-Aufbau ------------------------------------------------------

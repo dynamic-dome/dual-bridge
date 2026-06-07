@@ -15,6 +15,8 @@ import importlib
 import json
 import os
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
@@ -269,6 +271,131 @@ def test_digest_summarizes_without_escalation() -> None:
     print("  notify OK — --digest sendet eine Zusammenfassung, auch ohne Eskalation")
 
 
+# ===========================================================================
+# HTTP-Härtung (Spec 2026-06-07): Fehlerklassifikation, Retry, Dedup
+# ===========================================================================
+
+class _MockTelegram:
+    """Lokaler http.server, der ein scriptbares Ergebnis liefert. _post_telegram
+    läuft mit echtem urllib dagegen (P006: echte HTTPError/URLError-Kette,
+    kein gemockter Response)."""
+    def __init__(self, status=200, body=None, headers=None):
+        self.status = status
+        self.body = body if body is not None else '{"ok": true}'
+        self.headers = headers or {}
+        self._srv = None
+        self._thread = None
+
+    def __enter__(self):
+        outer = self
+
+        class _H(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(length)
+                self.send_response(outer.status)
+                for k, v in outer.headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(outer.body.encode("utf-8"))
+
+            def log_message(self, *a):  # stumm
+                pass
+
+        self._srv = HTTPServer(("127.0.0.1", 0), _H)
+        self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._thread.start()
+        host, port = self._srv.server_address
+        self.base_url = f"http://127.0.0.1:{port}"
+        return self
+
+    def __exit__(self, *a):
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
+def _post_to(bn, mock, text="hi"):
+    """_post_telegram gegen den Mock laufen lassen (API-Base umgebogen)."""
+    return bn._post_telegram(text, api_base=mock.base_url + "/bot{token}/sendMessage")
+
+
+# --- HTTP-Härtung: Klassifikation -------------------------------------------
+def test_4xx_classified_permanent() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    with _MockTelegram(status=401, body='{"ok": false}') as mock:
+        try:
+            _post_to(bn, mock)
+            assert False, "sollte werfen"
+        except bn.NotifySendError as exc:
+            assert exc.category == "PERMANENT"
+            assert exc.status == 401
+    print("  notify OK — 4xx -> PERMANENT")
+
+
+def test_429_classified_transient_with_retry_after() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    with _MockTelegram(status=429, body='{"ok": false}',
+                       headers={"Retry-After": "30"}) as mock:
+        try:
+            _post_to(bn, mock)
+            assert False
+        except bn.NotifySendError as exc:
+            assert exc.category == "TRANSIENT"
+            assert exc.retry_after == 30
+    print("  notify OK — 429 -> TRANSIENT + Retry-After")
+
+
+def test_5xx_classified_transient() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    with _MockTelegram(status=503, body="oops") as mock:
+        try:
+            _post_to(bn, mock)
+            assert False
+        except bn.NotifySendError as exc:
+            assert exc.category == "TRANSIENT"
+    print("  notify OK — 5xx -> TRANSIENT")
+
+
+def test_network_error_classified_transient() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    # Toter Port: nichts lauscht -> URLError -> TRANSIENT
+    try:
+        bn._post_telegram("hi", api_base="http://127.0.0.1:1/bot{token}/sendMessage")
+        assert False
+    except bn.NotifySendError as exc:
+        assert exc.category == "TRANSIENT"
+    print("  notify OK — Netzfehler -> TRANSIENT")
+
+
+def test_200_ok_false_classified_permanent() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    with _MockTelegram(status=200,
+                       body='{"ok": false, "description": "chat not found"}') as mock:
+        try:
+            _post_to(bn, mock)
+            assert False
+        except bn.NotifySendError as exc:
+            assert exc.category == "PERMANENT"
+    print("  notify OK — 200 ok:false -> PERMANENT")
+
+
+def test_retry_after_http_date_parsed() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    from email.utils import format_datetime
+    from datetime import datetime, timedelta, timezone
+    future = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120))
+    secs = bn._parse_retry_after(future)
+    assert secs is not None and secs > 0
+    print("  notify OK — Retry-After als HTTP-Datum geparst")
+
+
 def main() -> int:
     print("=== Eskalations-Notifier-Tests ===")
     tests = [
@@ -284,6 +411,13 @@ def main() -> int:
         test_reconcile_drops_stale_entries,
         test_notifier_is_read_only_on_escalations,
         test_digest_summarizes_without_escalation,
+        # HTTP-Härtung: Klassifikation
+        test_4xx_classified_permanent,
+        test_429_classified_transient_with_retry_after,
+        test_5xx_classified_transient,
+        test_network_error_classified_transient,
+        test_200_ok_false_classified_permanent,
+        test_retry_after_http_date_parsed,
     ]
     failed = 0
     for t in tests:
