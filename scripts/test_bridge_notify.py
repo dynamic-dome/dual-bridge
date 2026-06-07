@@ -92,10 +92,11 @@ def test_new_escalation_triggers_send() -> None:
     rec = _Recorder()
     sent, failed = bn.notify_new_escalations(send_fn=rec)
     assert rec.calls and len(rec.calls) == 1, rec.calls
-    assert sent == ["loop-aaaa"], sent
+    # sent/failed/sent.json-Keys sind jetzt notify_key (loop_id+reason-Hash).
+    assert len(sent) == 1 and sent[0].startswith("loop-aaaa:"), sent
     assert failed == [], failed
     saved = bn._load_sent()
-    assert "loop-aaaa" in saved, saved
+    assert any(k.startswith("loop-aaaa:") for k in saved), saved
     print("  notify OK — neue Eskalation -> ein Send + in sent.json markiert")
 
 
@@ -122,8 +123,10 @@ def test_multiple_new_escalations_each_sent_once() -> None:
     rec = _Recorder()
     sent, failed = bn.notify_new_escalations(send_fn=rec)
     assert len(rec.calls) == 3, rec.calls
-    assert set(sent) == {"loop-a", "loop-b", "loop-c"}, sent
-    assert set(bn._load_sent()) >= {"loop-a", "loop-b", "loop-c"}
+    prefixes = {k.split(":")[0] for k in sent}
+    assert prefixes == {"loop-a", "loop-b", "loop-c"}, sent
+    saved_prefixes = {k.split(":")[0] for k in bn._load_sent()}
+    assert saved_prefixes >= {"loop-a", "loop-b", "loop-c"}
     print("  notify OK — drei neue -> drei Sends, alle markiert")
 
 
@@ -135,9 +138,11 @@ def test_send_failure_does_not_mark_sent() -> None:
     rec = _Recorder(fail_for={"loop-aaaa"})
     sent, failed = bn.notify_new_escalations(send_fn=rec)
     assert sent == [], sent
-    assert failed == ["loop-aaaa"], failed
-    assert "loop-aaaa" not in bn._load_sent(), "Fehlschlag darf nicht markieren"
-    print("  notify OK — Sendefehler -> nicht markiert, beim nächsten Lauf erneut")
+    assert len(failed) == 1 and failed[0].startswith("loop-aaaa:"), failed
+    # Fehlschlag landet NICHT in sent.json (sondern als transient in attempts.json).
+    assert not any(k.startswith("loop-aaaa:") for k in bn._load_sent()), "Fehlschlag darf nicht markieren"
+    assert any(k.startswith("loop-aaaa:") for k in bn._load_attempts()), "transienter Fehler -> attempts.json"
+    print("  notify OK — Sendefehler -> nicht sent.json, sondern attempts.json (Retry)")
 
 
 # --- (5) Partial-Failure isoliert -------------------------------------------
@@ -148,10 +153,10 @@ def test_partial_failure_isolates() -> None:
         _write_escalation(bc, bs, loop_id=lid)
     rec = _Recorder(fail_for={"loop-b"})
     sent, failed = bn.notify_new_escalations(send_fn=rec)
-    assert set(sent) == {"loop-a", "loop-c"}, sent
-    assert failed == ["loop-b"], failed
-    saved = bn._load_sent()
-    assert "loop-a" in saved and "loop-c" in saved and "loop-b" not in saved, saved
+    assert {k.split(":")[0] for k in sent} == {"loop-a", "loop-c"}, sent
+    assert len(failed) == 1 and failed[0].startswith("loop-b:"), failed
+    saved_prefixes = {k.split(":")[0] for k in bn._load_sent()}
+    assert "loop-a" in saved_prefixes and "loop-c" in saved_prefixes and "loop-b" not in saved_prefixes, saved_prefixes
     print("  notify OK — ein Fehler isoliert, die anderen werden zugestellt")
 
 
@@ -418,6 +423,131 @@ def test_notify_key_changes_with_reason() -> None:
     print("  notify OK — notify_key ändert sich bei neuem reason, loop_id-Präfix bleibt")
 
 
+# --- HTTP-Härtung: Attempt-Lifecycle ----------------------------------------
+class _FailSender:
+    """send_fn, die eine NotifySendError mit fixer Kategorie wirft."""
+    def __init__(self, bn, category, status=None, retry_after=None):
+        self.bn, self.category, self.status, self.retry_after = bn, category, status, retry_after
+        self.calls = 0
+
+    def __call__(self, text):
+        self.calls += 1
+        raise self.bn.NotifySendError(self.category, self.status, self.retry_after, "sim")
+
+
+def test_transient_failure_records_attempt_not_sent() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-t")
+    sender = _FailSender(bn, "TRANSIENT", status=503)
+    sent, failed = bn.notify_new_escalations(send_fn=sender)
+    assert sent == [] and failed
+    att = bn._load_attempts()
+    key = next(iter(att))
+    assert att[key]["status"] == "transient_pending"
+    assert att[key]["attempts"] == 1
+    assert "next_retry_at" in att[key]
+    assert bn._load_sent() == {}
+    print("  notify OK — transient -> attempts.json, nicht sent.json")
+
+
+def test_retry_skipped_when_not_due() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-t", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-t")
+    from datetime import datetime, timedelta
+    future = (datetime.fromisoformat(bc.now_iso()) + timedelta(hours=1)).isoformat()
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-t", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": 1, "next_retry_at": future}})
+    rec = _Recorder()
+    sent, failed = bn.notify_new_escalations(send_fn=rec)
+    assert rec.calls == [] and sent == [] and failed == []
+    print("  notify OK — Retry nicht fällig -> kein Send")
+
+
+def test_retry_attempted_when_due() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-t", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-t")
+    from datetime import datetime, timedelta
+    past = (datetime.fromisoformat(bc.now_iso()) - timedelta(hours=1)).isoformat()
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-t", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": 1, "next_retry_at": past}})
+    rec = _Recorder()
+    sent, failed = bn.notify_new_escalations(send_fn=rec)
+    assert len(rec.calls) == 1 and sent
+    print("  notify OK — Retry fällig -> genau ein Versuch")
+
+
+def test_transient_then_success_moves_to_sent() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-t")
+    bn.notify_new_escalations(send_fn=_FailSender(bn, "TRANSIENT", status=503))
+    att = bn._load_attempts()
+    key = next(iter(att))
+    from datetime import datetime, timedelta
+    att[key]["next_retry_at"] = (datetime.fromisoformat(bc.now_iso()) - timedelta(hours=1)).isoformat()
+    bn._save_attempts(att)
+    rec = _Recorder()
+    sent, failed = bn.notify_new_escalations(send_fn=rec)
+    assert sent and bn._load_attempts() == {}
+    assert key in bn._load_sent()
+    print("  notify OK — transient dann Erfolg -> wandert nach sent.json")
+
+
+def test_permanent_failure_marks_failed() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-p")
+    sent, failed = bn.notify_new_escalations(send_fn=_FailSender(bn, "PERMANENT", status=401))
+    att = bn._load_attempts()
+    key = next(iter(att))
+    assert att[key]["status"] == "permanent_failed"
+    rec = _Recorder()
+    s2, f2 = bn.notify_new_escalations(send_fn=rec)
+    assert rec.calls == []
+    print("  notify OK — permanent -> failed, kein Folgeversuch")
+
+
+def test_max_attempts_becomes_permanent() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-m", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-m")
+    from datetime import datetime, timedelta
+    past = (datetime.fromisoformat(bc.now_iso()) - timedelta(hours=1)).isoformat()
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-m", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": bn.MAX_TRANSIENT_ATTEMPTS,
+        "next_retry_at": past}})
+    bn.notify_new_escalations(send_fn=_FailSender(bn, "TRANSIENT", status=503))
+    att = bn._load_attempts()
+    assert att[bn._notify_key(info)]["status"] == "permanent_failed"
+    print("  notify OK — MAX_TRANSIENT_ATTEMPTS -> permanent_failed")
+
+
+def test_changed_reason_triggers_one_renotify() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-r", trigger="stagnation", round_no="2")
+    rec1 = _Recorder()
+    bn.notify_new_escalations(send_fn=rec1)
+    assert len(rec1.calls) == 1
+    _write_escalation(bc, bs, loop_id="loop-r", trigger="max_rounds", round_no="4")
+    rec2 = _Recorder()
+    bn.notify_new_escalations(send_fn=rec2)
+    assert len(rec2.calls) == 1   # genau eine Re-Notification
+    rec3 = _Recorder()
+    bn.notify_new_escalations(send_fn=rec3)
+    assert rec3.calls == []
+    print("  notify OK — geänderter reason -> genau eine Re-Notification")
+
+
 # --- HTTP-Härtung: attempts.json + Backoff ----------------------------------
 def test_attempts_roundtrip() -> None:
     _fresh()
@@ -497,6 +627,14 @@ def main() -> int:
         test_next_retry_uses_retry_after_first,
         test_next_retry_exponential_without_header,
         test_retry_after_capped,
+        # HTTP-Härtung: Attempt-Lifecycle
+        test_transient_failure_records_attempt_not_sent,
+        test_retry_skipped_when_not_due,
+        test_retry_attempted_when_due,
+        test_transient_then_success_moves_to_sent,
+        test_permanent_failure_marks_failed,
+        test_max_attempts_becomes_permanent,
+        test_changed_reason_triggers_one_renotify,
     ]
     failed = 0
     for t in tests:

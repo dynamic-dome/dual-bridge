@@ -309,49 +309,94 @@ def build_digest_message() -> str:
 
 
 # --- Kernlogik (DCO-ready: reiner Aufruf, austauschbarer Aufrufer) -----------
+def _record_failure(attempts: dict, key: str, info, attempt_no: int,
+                    exc: Exception, category: str) -> None:
+    """Einen Fehlversuch in attempts.json eintragen. PERMANENT (oder erschöpfte
+    Versuche) -> Endzustand permanent_failed; sonst transient_pending mit
+    next_retry_at. last_error für Forensik."""
+    retry_after = getattr(exc, "retry_after", None)
+    base = {"loop_id": info.loop_id, "reason": _reason_of(info),
+            "attempts": attempt_no, "last_error": str(exc)}
+    if category == "PERMANENT" or attempt_no >= MAX_TRANSIENT_ATTEMPTS:
+        base["status"] = "permanent_failed"
+        print(f"[notify] PERMANENT gescheitert für {key} (Versuch {attempt_no}): {exc}")
+    else:
+        base["status"] = "transient_pending"
+        base["next_retry_at"] = _compute_next_retry_at(attempt_no, retry_after)
+        print(f"[notify] transient für {key} (Versuch {attempt_no}): {exc}")
+    attempts[key] = base
+
+
 def notify_new_escalations(send_fn=None, dry_run: bool = False,
                            mark: bool = True) -> tuple[list, list]:
-    """Für jede NEUE offene Eskalation genau eine Nachricht senden.
+    """Für jede FÄLLIGE Eskalation genau einen Send-Versuch. Fälligkeitslogik
+    pro notify_key: in sent.json -> skip; permanent_failed -> skip;
+    transient_pending & nicht fällig -> skip; transient_pending & fällig ->
+    retry; sonst -> neu.
 
     send_fn: Sender (text)->None; Default _post_telegram. Im Test injiziert.
     dry_run: nichts senden, nichts markieren — nur die geplanten Nachrichten
              auf stdout zeigen.
-    Rückgabe: (sent_loop_ids, failed_loop_ids).
+    Rückgabe: (sent_keys, failed_keys) — Schlüssel sind notify_key (loop_id+reason),
+    NICHT bloß loop_id (eine verschärfte Eskalation ist ein neuer Key).
 
-    at-least-once: Ein Sendefehler markiert die betroffene Eskalation NICHT als
-    gesendet → der nächste Lauf versucht sie erneut. Ein Fehler bei einer
-    Eskalation blockiert die anderen nicht.
+    at-least-once: transiente Fehler bleiben in attempts.json und werden beim
+    nächsten fälligen Lauf erneut versucht; permanente kippen auf
+    permanent_failed (kein Push-Sturm). Schreibt NUR in state/_notify/.
     """
     send_fn = send_fn or _post_telegram
     escalations = bs.scan_escalations(bs.STATE_DIR)
-    already = _load_sent()
+    sent_map = _load_sent()
+    attempts = _load_attempts()
+    now = datetime.fromisoformat(bc.now_iso())
 
     sent: list[str] = []
     failed: list[str] = []
-    new_marks: dict = {}
 
     for info in escalations:
-        lid = info.loop_id
-        if lid in already:
-            continue  # schon gemeldet -> Idempotenz
-        question = _extract_question(lid)
+        key = _notify_key(info)
+        if key in sent_map:
+            continue  # schon zugestellt
+        rec = attempts.get(key)
+        if rec and rec.get("status") == "permanent_failed":
+            continue  # nie wieder
+        if rec and rec.get("status") == "transient_pending":
+            try:
+                due = datetime.fromisoformat(rec.get("next_retry_at", bc.now_iso()))
+            except ValueError:
+                due = now
+            if now < due:
+                continue  # noch nicht fällig
+            attempt_no = int(rec.get("attempts", 0)) + 1
+        else:
+            attempt_no = 1
+
+        question = _extract_question(info.loop_id)
         msg = format_escalation_message(info, question)
         if dry_run:
             print(f"[dry-run] würde senden:\n{msg}\n")
             continue
+
         try:
             send_fn(msg)
-        except Exception as exc:  # noqa: BLE001 — fail-safe, nicht markieren
-            print(f"[notify] Senden fehlgeschlagen für {lid}: {exc}")
-            failed.append(lid)
+        except NotifySendError as exc:
+            failed.append(key)
+            _record_failure(attempts, key, info, attempt_no, exc, exc.category)
             continue
-        sent.append(lid)
-        new_marks[lid] = {"created": info.created, "notified_at": bc.now_iso()}
+        except Exception as exc:  # noqa: BLE001 — unbekannt -> konservativ transient
+            failed.append(key)
+            _record_failure(attempts, key, info, attempt_no, exc, "TRANSIENT")
+            continue
 
-    if mark and not dry_run and new_marks:
-        merged = _load_sent()
-        merged.update(new_marks)
-        _save_sent(merged)
+        # Erfolg: nach sent.json, aus attempts.json entfernen.
+        sent.append(key)
+        attempts.pop(key, None)
+        sent_map[key] = {"loop_id": info.loop_id, "reason": _reason_of(info),
+                         "created": info.created, "notified_at": bc.now_iso()}
+
+    if mark and not dry_run:
+        _save_sent(sent_map)
+        _save_attempts(attempts)
 
     return sent, failed
 
