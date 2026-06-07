@@ -483,16 +483,29 @@ def send_overnight_digest(record: dict, send_fn=None) -> int:
 
 
 def reconcile() -> list:
-    """sent.json gegen die aktuell offenen Eskalationen bereinigen: Einträge,
-    deren Eskalation nicht mehr offen ist, entfernen. Sendet nichts. Rückgabe:
-    Liste der entfernten loop_ids."""
-    open_ids = {e.loop_id for e in bs.scan_escalations(bs.STATE_DIR)}
-    saved = _load_sent()
-    removed = [lid for lid in saved if lid not in open_ids]
-    if removed:
-        for lid in removed:
-            saved.pop(lid, None)
-        _save_sent(saved)
+    """sent.json UND attempts.json gegen die aktuell offenen Eskalationen
+    bereinigen: Einträge, deren loop_id nicht mehr offen ist, entfernen. Sendet
+    nichts. Rückgabe: Liste der entfernten notify_keys.
+
+    Vergleich über das gespeicherte loop_id-Feld (NICHT den notify_key selbst —
+    der trägt den reason-Hash und matcht nie direkt eine offene loop_id)."""
+    open_loops = {e.loop_id for e in bs.scan_escalations(bs.STATE_DIR)}
+    removed: list[str] = []
+
+    sent_map = _load_sent()
+    for key in list(sent_map):
+        if sent_map[key].get("loop_id") not in open_loops:
+            sent_map.pop(key)
+            removed.append(key)
+    _save_sent(sent_map)
+
+    attempts = _load_attempts()
+    for key in list(attempts):
+        if attempts[key].get("loop_id") not in open_loops:
+            attempts.pop(key)
+            removed.append(key)
+    _save_attempts(attempts)
+
     return removed
 
 

@@ -548,6 +548,58 @@ def test_changed_reason_triggers_one_renotify() -> None:
     print("  notify OK — geänderter reason -> genau eine Re-Notification")
 
 
+# --- HTTP-Härtung: reconcile / dry-run / rc ---------------------------------
+def test_reconcile_cleans_both_sidecars() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-open")
+    bn._save_sent({"loop-gone:abc": {"loop_id": "loop-gone"}})
+    bn._save_attempts({"loop-gone:def": {"loop_id": "loop-gone", "status": "permanent_failed"}})
+    removed = bn.reconcile()
+    assert any("loop-gone" in r for r in removed)
+    assert bn._load_sent() == {}
+    assert bn._load_attempts() == {}
+    print("  notify OK — reconcile räumt sent.json UND attempts.json")
+
+
+def test_dry_run_touches_no_sidecar() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-d")
+    bn.notify_new_escalations(dry_run=True)
+    assert bn._load_sent() == {}
+    assert bn._load_attempts() == {}
+    print("  notify OK — --dry-run berührt keinen Sidecar")
+
+
+def test_main_rc3_on_permanent_failure() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    _write_escalation(bc, bs, loop_id="loop-rc")
+
+    def _boom(text, api_base=None):
+        raise bn.NotifySendError("PERMANENT", 401, None, "bad token")
+    bn._post_telegram = _boom  # type: ignore
+    rc = bn.main([])
+    assert rc == 3
+    print("  notify OK — permanenter Fehler -> main rc=3")
+
+
+def test_main_rc0_when_retry_not_due() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-rc0", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-rc0")
+    from datetime import datetime, timedelta
+    future = (datetime.fromisoformat(bc.now_iso()) + timedelta(hours=1)).isoformat()
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-rc0", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": 1, "next_retry_at": future}})
+    rc = bn.main([])
+    assert rc == 0   # nichts fällig -> kein Fehlversuch -> rc 0
+    print("  notify OK — Retry nicht fällig -> main rc=0")
+
+
 # --- HTTP-Härtung: attempts.json + Backoff ----------------------------------
 def test_attempts_roundtrip() -> None:
     _fresh()
@@ -635,6 +687,11 @@ def main() -> int:
         test_permanent_failure_marks_failed,
         test_max_attempts_becomes_permanent,
         test_changed_reason_triggers_one_renotify,
+        # HTTP-Härtung: reconcile / dry-run / rc
+        test_reconcile_cleans_both_sidecars,
+        test_dry_run_touches_no_sidecar,
+        test_main_rc3_on_permanent_failure,
+        test_main_rc0_when_retry_not_due,
     ]
     failed = 0
     for t in tests:
