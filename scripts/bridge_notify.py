@@ -161,6 +161,44 @@ def _save_sent(data: dict) -> None:
     bc.write_text_atomic(_sent_path(), json.dumps(data, ensure_ascii=False, indent=2))
 
 
+# --- Sidecar-State (attempts.json: Retry-Zustand cross-trigger) --------------
+def _attempts_path() -> Path:
+    return _notify_dir() / ATTEMPTS_FILE_NAME
+
+
+def _load_attempts() -> dict:
+    """Übergangs-State pro notify_key (transient_pending/permanent_failed).
+    Defensiv: {} bei fehlend/kaputt (nie crashen)."""
+    path = _attempts_path()
+    try:
+        if not path.exists():
+            return {}
+        data = json.loads(bc.read_text_utf8(path))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_attempts(data: dict) -> None:
+    """attempts.json atomar schreiben. Zweiter (und letzter) Schreib-Ort des
+    Notifiers neben sent.json — beide in state/_notify/."""
+    _notify_dir().mkdir(parents=True, exist_ok=True)
+    bc.write_text_atomic(_attempts_path(), json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _compute_next_retry_at(attempts: int, retry_after: int | None) -> str:
+    """ISO-Zeitstempel des nächsten Retry. Retry-After zuerst (gedeckelt auf
+    RETRY_AFTER_CAP_SEC), sonst exp-Backoff (gedeckelt auf BACKOFF_CAP_SEC).
+    Kein sleep — nur ein Zeitstempel, den der nächste Trigger-Lauf prüft."""
+    from datetime import timedelta
+    if retry_after is not None and retry_after >= 0:
+        delay = min(retry_after, RETRY_AFTER_CAP_SEC)
+    else:
+        delay = min(BACKOFF_BASE_SEC * (2 ** max(0, attempts - 1)), BACKOFF_CAP_SEC)
+    base = datetime.fromisoformat(bc.now_iso())
+    return (base + timedelta(seconds=delay)).isoformat()
+
+
 # --- Telegram-Transport ------------------------------------------------------
 def _post_telegram(text: str,
                    api_base: str = "https://api.telegram.org/bot{token}/sendMessage") -> None:

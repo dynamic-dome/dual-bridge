@@ -418,6 +418,54 @@ def test_notify_key_changes_with_reason() -> None:
     print("  notify OK — notify_key ändert sich bei neuem reason, loop_id-Präfix bleibt")
 
 
+# --- HTTP-Härtung: attempts.json + Backoff ----------------------------------
+def test_attempts_roundtrip() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    bn._save_attempts({"k1": {"status": "transient_pending", "attempts": 1}})
+    loaded = bn._load_attempts()
+    assert loaded["k1"]["attempts"] == 1
+    print("  notify OK — attempts.json roundtrip")
+
+
+def test_load_attempts_defensive_when_missing() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    assert bn._load_attempts() == {}
+    print("  notify OK — _load_attempts defensiv ({} bei fehlend)")
+
+
+def test_next_retry_uses_retry_after_first() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    from datetime import datetime
+    nxt = bn._compute_next_retry_at(attempts=1, retry_after=30)
+    delta = (datetime.fromisoformat(nxt) - datetime.fromisoformat(bc.now_iso())).total_seconds()
+    assert 25 <= delta <= 35  # ~30s, Retry-After gewinnt
+    print("  notify OK — next_retry nutzt Retry-After zuerst")
+
+
+def test_next_retry_exponential_without_header() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    from datetime import datetime
+    nxt = bn._compute_next_retry_at(attempts=2, retry_after=None)
+    delta = (datetime.fromisoformat(nxt) - datetime.fromisoformat(bc.now_iso())).total_seconds()
+    # BACKOFF_BASE_SEC=60 * 2^(2-1) = 120
+    assert 110 <= delta <= 130
+    print("  notify OK — exp-Backoff ohne Header")
+
+
+def test_retry_after_capped() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    from datetime import datetime
+    nxt = bn._compute_next_retry_at(attempts=1, retry_after=999999)
+    delta = (datetime.fromisoformat(nxt) - datetime.fromisoformat(bc.now_iso())).total_seconds()
+    assert delta <= bn.RETRY_AFTER_CAP_SEC + 5
+    print("  notify OK — absurder Retry-After gedeckelt")
+
+
 def main() -> int:
     print("=== Eskalations-Notifier-Tests ===")
     tests = [
@@ -443,6 +491,12 @@ def main() -> int:
         # HTTP-Härtung: Dedup-Key
         test_notify_key_stable_for_same_reason,
         test_notify_key_changes_with_reason,
+        # HTTP-Härtung: attempts.json + Backoff
+        test_attempts_roundtrip,
+        test_load_attempts_defensive_when_missing,
+        test_next_retry_uses_retry_after_first,
+        test_next_retry_exponential_without_header,
+        test_retry_after_capped,
     ]
     failed = 0
     for t in tests:
