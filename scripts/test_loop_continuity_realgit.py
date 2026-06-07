@@ -15,11 +15,14 @@ def _git(cwd, *args):
                           stdin=subprocess.DEVNULL)
 
 
-def _make_origin(tmp_path) -> str:
-    """Create a bare origin repo with one commit on main, return its path."""
+def _make_origin(tmp_path, default_branch: str = "main") -> str:
+    """Create a bare origin repo with one commit on default_branch, return path.
+
+    default_branch='master' reproduces the real DCO repo, where the loop is still
+    invoked with --base-branch main but origin only has master (2026-06-07)."""
     seed = tmp_path / "seed"
     seed.mkdir()
-    subprocess.run(["git", "init", "-b", "main", str(seed)], check=True,
+    subprocess.run(["git", "init", "-b", default_branch, str(seed)], check=True,
                    capture_output=True)
     _git(seed, "config", "user.email", "t@t.local")
     _git(seed, "config", "user.name", "t")
@@ -29,6 +32,8 @@ def _make_origin(tmp_path) -> str:
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "clone", "--bare", str(seed), str(bare)],
                    check=True, capture_output=True)
+    # A bare clone's HEAD points at default_branch -> _remote_default_branch
+    # resolves it, mirroring a real master-only remote.
     return str(bare)
 
 
@@ -229,3 +234,35 @@ def test_merge_accepted_to_base_conflict_raises(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError):
         ca.merge_accepted_to_base(repo=origin, branch="bridge/loop-A",
                                   base_branch="main", workdir=workroot / "loop-A")
+
+
+def test_merge_accepted_resolves_base_on_master_repo(monkeypatch, tmp_path):
+    """The merge must resolve main->master itself (like the build does), else a
+    master-only repo dies with 'origin/main is not a commit' AFTER an accepted
+    build — the merge silently fails and the next package never accumulates
+    (observed live 2026-06-07, reminders Paket A loop ...d415). Build with
+    --base-branch main against a MASTER-only origin, then merge: it must land on
+    master, not raise."""
+    origin = _make_origin(tmp_path, default_branch="master")
+    workroot = tmp_path / "wr"
+    workroot.mkdir()
+    line = ["paketA-master"]
+    _fake_codex_appends(monkeypatch, line)
+
+    rA = ca.run_codex_task(auftrag="build A", repo=origin, base_branch="main",
+                           task_id="tA", workroot=workroot,
+                           branch="bridge/loop-A", workdir_name="loop-A")
+    assert rA.status == "done", rA.error_text
+
+    # Caller passes the unresolved 'main' (exactly what loop_driver does); the
+    # merge must resolve it to master itself.
+    new_head = ca.merge_accepted_to_base(
+        repo=origin, branch="bridge/loop-A", base_branch="main",
+        workdir=workroot / "loop-A")
+    assert new_head, "merge returned no head on a master-only repo"
+
+    probe = tmp_path / "probe"
+    subprocess.run(["git", "clone", "-b", "master", origin, str(probe)],
+                   check=True, capture_output=True)
+    assert "paketA-master" in (probe / "f.txt").read_text(encoding="utf-8"), \
+        "accepted build did not accumulate into master after merge"

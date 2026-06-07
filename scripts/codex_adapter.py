@@ -580,6 +580,12 @@ def merge_accepted_to_base(repo: str, branch: str, base_branch: str,
     conflict — an unmerged accept must be visible, not pretended."""
     cred = _resolve_https_credential(repo)
     try:
+        # Resolve main->master/trunk here too: the caller (loop_driver) hands in
+        # the unresolved 'main' default, so a master-only repo would die with
+        # 'origin/main is not a commit' AFTER an accepted build — the build path
+        # resolves the base but the merge path did not (live regression
+        # 2026-06-07, reminders Paket A). Same probe the build uses.
+        base_branch = _resolve_base_branch(repo, base_branch, cred)
         fetch = _run_git(workdir, "fetch", "origin", cred=cred)
         if fetch.returncode != 0:
             raise RuntimeError(f"fetch failed: {fetch.stderr.strip()}")
