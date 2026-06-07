@@ -531,6 +531,45 @@ def test_max_attempts_becomes_permanent() -> None:
     print("  notify OK — MAX_TRANSIENT_ATTEMPTS -> permanent_failed")
 
 
+def test_boundary_fifth_attempt_becomes_permanent() -> None:
+    """Verifier-Fund: exakter Boundary attempts=5 -> attempt_no=6 == MAX -> kippt.
+    Schützt gegen ein >/>= Off-by-one (mein anderer Test prüft nur attempts=6)."""
+    _fresh()
+    bc, bs, bn = _reload()
+    assert bn.MAX_TRANSIENT_ATTEMPTS == 6
+    info = bs.EscalationInfo(loop_id="loop-bnd", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-bnd")
+    from datetime import datetime, timedelta
+    past = (datetime.fromisoformat(bc.now_iso()) - timedelta(hours=1)).isoformat()
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-bnd", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": 5, "next_retry_at": past}})
+    bn.notify_new_escalations(send_fn=_FailSender(bn, "TRANSIENT", status=503))
+    rec = bn._load_attempts()[bn._notify_key(info)]
+    assert rec["attempts"] == 6
+    assert rec["status"] == "permanent_failed"
+    print("  notify OK — attempts=5 -> attempt_no=6 == MAX -> permanent_failed")
+
+
+def test_tz_aware_next_retry_at_does_not_crash() -> None:
+    """Verifier-Fund: ein tz-aware next_retry_at in der (editierbaren) attempts.json
+    darf den Lauf NICHT mit TypeError killen — fail-soft: als fällig behandeln."""
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-tz", trigger="max_rounds", round="3")
+    _write_escalation(bc, bs, loop_id="loop-tz")
+    # tz-aware Vergangenheit (Suffix +00:00) — naive now() vs aware due
+    bn._save_attempts({bn._notify_key(info): {
+        "loop_id": "loop-tz", "reason": bn._reason_of(info),
+        "status": "transient_pending", "attempts": 1,
+        "next_retry_at": "2000-01-01T00:00:00+00:00"}})
+    rec = _Recorder()
+    # darf nicht werfen; als fällig behandelt -> genau ein Versuch
+    sent, failed = bn.notify_new_escalations(send_fn=rec)
+    assert len(rec.calls) == 1 and sent
+    print("  notify OK — tz-aware next_retry_at crasht nicht (fail-soft fällig)")
+
+
 def test_changed_reason_triggers_one_renotify() -> None:
     _fresh()
     bc, bs, bn = _reload()
@@ -686,6 +725,8 @@ def main() -> int:
         test_transient_then_success_moves_to_sent,
         test_permanent_failure_marks_failed,
         test_max_attempts_becomes_permanent,
+        test_boundary_fifth_attempt_becomes_permanent,
+        test_tz_aware_next_retry_at_does_not_crash,
         test_changed_reason_triggers_one_renotify,
         # HTTP-Härtung: reconcile / dry-run / rc
         test_reconcile_cleans_both_sidecars,

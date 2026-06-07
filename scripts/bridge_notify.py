@@ -363,9 +363,17 @@ def notify_new_escalations(send_fn=None, dry_run: bool = False,
         if rec and rec.get("status") == "transient_pending":
             try:
                 due = datetime.fromisoformat(rec.get("next_retry_at", bc.now_iso()))
-            except ValueError:
+            except (ValueError, TypeError):
                 due = now
-            if now < due:
+            # next_retry_at wird intern immer naiv geschrieben; ein extern in die
+            # editierbare attempts.json geratener tz-aware Wert würde den Vergleich
+            # mit dem naiven now crashen -> fail-soft als fällig behandeln, nie den
+            # ganzen Lauf killen.
+            try:
+                overdue = now >= due
+            except TypeError:
+                overdue = True
+            if not overdue:
                 continue  # noch nicht fällig
             attempt_no = int(rec.get("attempts", 0)) + 1
         else:
