@@ -153,6 +153,43 @@ def test_scan_dangerous_clean_passes(monkeypatch, tmp_path):
     assert ld.scan_dangerous("def greet(name):\n    return f'Hi {name}'") is None
 
 
+# --- Task 4b: parametrised CRUD DELETE FROM must NOT escalate (False-Positive
+# 2026-06-07: the reminders-v2 goal-loop escalated in round 0 because a legit
+# `DELETE FROM reminders WHERE id = ?` CRUD method matched the bare DELETE-FROM
+# guard. A row-targeted DELETE with a bound placeholder is the OPPOSITE of the
+# destructive mass-delete the guard exists to stop). ---
+
+def test_scan_dangerous_allows_parametrised_crud_delete(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # qmark, named and pyformat placeholders are all legitimate row-targeted CRUD.
+    assert ld.scan_dangerous("DELETE FROM reminders WHERE id = ?") is None
+    assert ld.scan_dangerous("DELETE FROM reminders WHERE id = :rid") is None
+    assert ld.scan_dangerous("DELETE FROM reminders WHERE id = %s") is None
+
+
+def test_scan_dangerous_allows_crud_delete_in_diff(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    diff = (
+        "+def delete(rid: int) -> None:\n"
+        '+    _conn().execute("DELETE FROM reminders WHERE id = ?", (rid,))\n'
+    )
+    assert ld.scan_dangerous(diff) is None
+
+
+def test_scan_dangerous_still_flags_mass_delete(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # No WHERE at all -> wipes the whole table. Still dangerous.
+    assert ld.scan_dangerous("DELETE FROM users;") is not None
+    assert ld.scan_dangerous("DELETE FROM users") is not None
+
+
+def test_scan_dangerous_still_flags_unparametrised_where(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A WHERE without a bound placeholder is not the safe CRUD shape; an always-
+    # true / literal predicate can still wipe rows wholesale. Keep escalating.
+    assert ld.scan_dangerous("DELETE FROM users WHERE 1=1") is not None
+
+
 # --- Task 5: write/read escalation ---
 
 def test_write_and_read_escalation_roundtrip(monkeypatch, tmp_path):

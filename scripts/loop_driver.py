@@ -149,6 +149,33 @@ DANGEROUS_PATTERNS = [
 ]
 _DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
 
+_DELETE_FROM_PAT = r"\bDELETE\s+FROM\b"
+# A row-targeted CRUD delete: `DELETE FROM <tbl> WHERE ... <placeholder>` where
+# the predicate is bound (`?`, `:name`, `%s`, `%(name)s`). This is the OPPOSITE
+# of the destructive mass-delete the guard exists to stop — a bound placeholder
+# means a specific row, not a table wipe. False-Positive 2026-06-07: the
+# reminders-v2 goal-loop escalated in round 0 on a legit `delete(id)` method.
+_CRUD_DELETE_RE = re.compile(
+    r"\bDELETE\s+FROM\b.*\bWHERE\b.*(?:\?|:\w+|%\(\w+\)s|%s)",
+    re.IGNORECASE,
+)
+
+
+def _delete_from_is_safe(text: str) -> bool:
+    """True only if EVERY `DELETE FROM` occurrence in `text` is the safe,
+    parametrised single-row CRUD shape. One bare or unparametrised DELETE FROM
+    (no WHERE, or a WHERE without a bound placeholder) makes the whole text
+    unsafe — we must not let a safe CRUD line in a diff mask a mass-delete
+    elsewhere in the same diff."""
+    delete_re = re.compile(_DELETE_FROM_PAT, re.IGNORECASE)
+    saw_delete = False
+    for line in text.splitlines() or [text]:
+        if delete_re.search(line):
+            saw_delete = True
+            if not _CRUD_DELETE_RE.search(line):
+                return False
+    return saw_delete
+
 
 def scan_dangerous(text: str) -> str | None:
     """Return the first dangerous pattern found in `text`, or None if clean.
@@ -158,6 +185,11 @@ def scan_dangerous(text: str) -> str | None:
         return None
     for pat, rx in zip(DANGEROUS_PATTERNS, _DANGEROUS_RE):
         if rx.search(text):
+            # Allow legitimate parametrised CRUD deletes through the otherwise
+            # bare DELETE-FROM guard (the pattern stays in DANGEROUS_PATTERNS for
+            # the drift mirror; the exception lives here, not in the list).
+            if pat == _DELETE_FROM_PAT and _delete_from_is_safe(text):
+                continue
             return pat
     return None
 
