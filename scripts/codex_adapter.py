@@ -667,15 +667,21 @@ def run_codex_task(
     # Resolve the real base branch BEFORE any git op: the loop defaults to 'main',
     # but a 'master'/'trunk' repo would otherwise fail every clone/rev-list/diff
     # (they all reference origin/<base_branch>). One credential resolve here; the
-    # store file is ephemeral and cleaned up in the finally. On a fresh workdir we
-    # can probe the remote; for an existing workdir base_branch is already proven
-    # by the prior round, so skip the probe and avoid a redundant network call.
-    if not (workdir / ".git").exists():
-        _bb_cred = _resolve_https_credential(repo)
-        try:
-            base_branch = _resolve_base_branch(repo, base_branch, _bb_cred)
-        finally:
-            _bb_cred.cleanup()
+    # store file is ephemeral and cleaned up in the finally.
+    #
+    # This MUST run every round, not only on a fresh workdir. base_branch is a
+    # per-call local the loop re-supplies as 'main' each round — it is NOT
+    # persisted. Skipping the probe on an existing workdir (round 2+) therefore
+    # left base_branch='main' on a master-only repo, so `git diff origin/main...
+    # HEAD` died and the reviewer got an EMPTY diff -> rejected -> max_rounds
+    # escalation, even though codex had built correctly (reminders-v2 Paket B,
+    # loop ...4905, 2026-06-07). The redundant ls-remote per round is cheap
+    # insurance against that silent continuity break.
+    _bb_cred = _resolve_https_credential(repo)
+    try:
+        base_branch = _resolve_base_branch(repo, base_branch, _bb_cred)
+    finally:
+        _bb_cred.cleanup()
     try:
         _git_clone_or_pull(repo, base_branch, workdir, prefer_branch=branch)
     except RuntimeError as exc:

@@ -81,17 +81,26 @@ def test_remote_default_branch_none_on_empty(monkeypatch):
     assert ca._remote_default_branch("https://x/r", _Cred(env={})) is None
 
 
-def test_resolve_runs_only_on_fresh_workdir(monkeypatch, tmp_path):
-    """run_codex_task must NOT re-probe the base branch when the workdir already
-    has a .git (round 2+): base is already proven, a probe wastes a network call.
-    We assert _resolve_base_branch is not called in that case."""
+def test_resolve_runs_on_existing_workdir_too(monkeypatch, tmp_path):
+    """run_codex_task MUST re-resolve the base branch on every round, including
+    when the workdir already has a .git (round 2+).
+
+    base_branch is a per-call local that the loop hands in as 'main' each round;
+    it is NOT persisted across rounds. The earlier "skip the probe on an existing
+    workdir" optimisation therefore left base_branch='main' in round 2+, so every
+    `git diff origin/main...HEAD` died on a master-only repo and the reviewer got
+    an EMPTY diff -> rejected -> max_rounds escalation, even though codex had
+    built correctly (observed 2026-06-07, reminders-v2 Paket B, loop ...4905).
+    The resolve must run every round so master/trunk repos diff correctly past
+    round 0."""
     workroot = tmp_path / "wr"
     existing = workroot / "loop-x"
     (existing / ".git").mkdir(parents=True)
 
     called = {"resolve": False}
     monkeypatch.setattr(ca, "_resolve_base_branch",
-                        lambda *a, **k: called.__setitem__("resolve", True) or "main")
+                        lambda *a, **k: called.__setitem__("resolve", True) or "master")
+    monkeypatch.setattr(ca, "_resolve_https_credential", lambda _r: _Cred(env={}))
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
     monkeypatch.setattr(ca, "_git_clone_or_pull", lambda *a, **k: existing)
     monkeypatch.setattr(ca, "_git_checkout_branch", lambda *a, **k: None)
@@ -102,4 +111,4 @@ def test_resolve_runs_only_on_fresh_workdir(monkeypatch, tmp_path):
 
     ca.run_codex_task("auftrag", "https://x/r", "main", "tid",
                       workroot, workdir_name="loop-x")
-    assert called["resolve"] is False
+    assert called["resolve"] is True
