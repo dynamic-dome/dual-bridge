@@ -150,29 +150,38 @@ DANGEROUS_PATTERNS = [
 _DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
 
 _DELETE_FROM_PAT = r"\bDELETE\s+FROM\b"
+_DELETE_FROM_RE = re.compile(_DELETE_FROM_PAT, re.IGNORECASE)
 # A row-targeted CRUD delete: `DELETE FROM <tbl> WHERE ... <placeholder>` where
 # the predicate is bound (`?`, `:name`, `%s`, `%(name)s`). This is the OPPOSITE
 # of the destructive mass-delete the guard exists to stop — a bound placeholder
 # means a specific row, not a table wipe. False-Positive 2026-06-07: the
 # reminders-v2 goal-loop escalated in round 0 on a legit `delete(id)` method.
+# (?s): `.` spans newlines so a line-wrapped `DELETE FROM x\n WHERE id = ?`
+# statement still reads as one safe shape.
 _CRUD_DELETE_RE = re.compile(
-    r"\bDELETE\s+FROM\b.*\bWHERE\b.*(?:\?|:\w+|%\(\w+\)s|%s)",
+    r"(?s)\bDELETE\s+FROM\b.*\bWHERE\b.*(?:\?|:\w+|%\(\w+\)s|%s)",
     re.IGNORECASE,
 )
+# Strip SQL line-comments so a `DELETE FROM users; -- WHERE id = ?` cannot
+# launder a table wipe by hiding a fake placeholder in a comment.
+_SQL_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
 
 
 def _delete_from_is_safe(text: str) -> bool:
-    """True only if EVERY `DELETE FROM` occurrence in `text` is the safe,
-    parametrised single-row CRUD shape. One bare or unparametrised DELETE FROM
-    (no WHERE, or a WHERE without a bound placeholder) makes the whole text
-    unsafe — we must not let a safe CRUD line in a diff mask a mass-delete
-    elsewhere in the same diff."""
-    delete_re = re.compile(_DELETE_FROM_PAT, re.IGNORECASE)
+    """True only if EVERY `DELETE FROM` statement in `text` is the safe,
+    parametrised single-row CRUD shape.
+
+    Reasons per SQL statement (split on `;`), NOT per text line, so that a
+    line-wrapped CRUD delete is not a false-positive AND a mass-delete in a
+    second statement on the same line (or a trailing-comment bypass) cannot be
+    masked by a safe sibling. One bare/unparametrised DELETE FROM makes the
+    whole text unsafe."""
+    cleaned = _SQL_LINE_COMMENT_RE.sub("", text)
     saw_delete = False
-    for line in text.splitlines() or [text]:
-        if delete_re.search(line):
+    for stmt in cleaned.split(";"):
+        if _DELETE_FROM_RE.search(stmt):
             saw_delete = True
-            if not _CRUD_DELETE_RE.search(line):
+            if not _CRUD_DELETE_RE.search(stmt):
                 return False
     return saw_delete
 

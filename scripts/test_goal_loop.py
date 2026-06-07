@@ -190,6 +190,33 @@ def test_scan_dangerous_still_flags_unparametrised_where(monkeypatch, tmp_path):
     assert ld.scan_dangerous("DELETE FROM users WHERE 1=1") is not None
 
 
+# --- Task 4c: statement-level robustness (verifier edge cases 2026-06-07).
+# The CRUD allowance must reason per SQL statement, not per text line, so that
+# (a) a line-wrapped legit CRUD delete is NOT a false-positive and
+# (b) a mass-delete disguised with a trailing SQL comment is NOT let through. ---
+
+def test_scan_dangerous_allows_multiline_crud_delete(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # Codex may wrap the statement: `DELETE FROM x` and `WHERE id = ?` on
+    # separate lines. Still one safe, row-targeted statement -> must pass.
+    assert ld.scan_dangerous("DELETE FROM reminders\n    WHERE id = ?") is None
+
+
+def test_scan_dangerous_flags_mass_delete_with_comment_bypass(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A trailing `-- WHERE id = ?` comment must NOT launder a table wipe. The
+    # actual statement is `DELETE FROM users` with no WHERE -> still dangerous.
+    assert ld.scan_dangerous("DELETE FROM users; -- WHERE id = ?") is not None
+
+
+def test_scan_dangerous_flags_second_stmt_mass_delete(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # First statement is safe CRUD, second is a table wipe on the same line.
+    # One unsafe statement makes the whole text unsafe.
+    assert ld.scan_dangerous(
+        "DELETE FROM users WHERE id = ?; DELETE FROM audit") is not None
+
+
 # --- Task 5: write/read escalation ---
 
 def test_write_and_read_escalation_roundtrip(monkeypatch, tmp_path):
