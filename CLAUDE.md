@@ -58,6 +58,15 @@ Eskaliert (fail-closed) → `state/ESCALATION-<loop_id>.md`.
 `DUAL_BRIDGE_CODEX_TIMEOUT` (killt `codex exec`, Default 600s). Bei „codex timeout
 nach Ns" beide anheben oder den Seed kleiner schneiden (README §Konfiguration).
 
+**Abhängige Paket-Ketten (B baut auf A):** Jeder Loop klont frisch von der
+Base (`master`/`main`, hostname-/repo-aufgelöst). Pakete akkumulieren NICHT von
+selbst — A muss in die Base gemergt sein, BEVOR B's Loop klont. Dafür
+`--merge-on-accept`: bei `accepted` mergt die Bridge den Loop-Branch in die Base
+und pusht (fail-soft bei Konflikt → accepted bleibt gültig, Branch manuell
+mergen). Im DCO-Worker (`job_poll.py`) per `DUAL_BRIDGE_MERGE_ON_ACCEPT=1`
+(Default aus) schaltbar — bewusst aktivieren, wenn eine abhängige Kette läuft;
+sonst pusht jeder Einzeljob in die Repo-Base.
+
 ### 3. Overnight-Scheduler (nächtliche Seed-Queue)
 Seeds liegen als `docs/overnight/*.md` (Format: `docs/overnight/README.md`;
 `.skip`-Suffix oder `_done/` = ignoriert).

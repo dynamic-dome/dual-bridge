@@ -287,6 +287,65 @@ def test_goal_loop_accepted_round_one(monkeypatch, tmp_path):
     assert summary["escalated"] is False
     assert summary["final_commit"] == "c1"
     assert summary["final_branch"].startswith("bridge/loop-")
+    # Default: no auto-merge unless explicitly requested.
+    assert summary["merged"] is False
+
+
+# --- Task 6b: merge_on_accept integrates the accepted build into base so the
+# next package's fresh clone sees it (cross-package accumulation, 2026-06-07). ---
+
+def test_goal_loop_merge_on_accept_merges(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    calls = {}
+    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base",
+                        lambda repo, branch, base_branch, workdir:
+                        calls.update(repo=repo, branch=branch,
+                                     base=base_branch) or "deadbee")
+    summary = ld.run_goal_loop(
+        goal="Add greet util", done_criteria=["greet works"],
+        repo="r", base_branch="main", max_rounds=3, round_timeout=5,
+        interval=1, build_runner=_fake_build_factory(["c1"]),
+        b_tick=_b_verdict("accepted"), merge_on_accept=True)
+    assert summary["accepted"] is True
+    assert summary["merged"] is True
+    assert summary["merge_error"] == ""
+    # The accepted loop branch was the merge source; base was the target.
+    assert calls["base"] == "main"
+    assert calls["branch"] == summary["final_branch"]
+
+
+def test_goal_loop_merge_off_by_default(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    called = {"merge": False}
+    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base",
+                        lambda **k: called.__setitem__("merge", True) or "x")
+    summary = ld.run_goal_loop(
+        goal="g", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]), b_tick=_b_verdict("accepted"))
+    assert summary["accepted"] is True
+    assert called["merge"] is False, "merge ran without merge_on_accept"
+    assert summary["merged"] is False
+
+
+def test_goal_loop_merge_failure_keeps_accepted(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+
+    def boom(**k):
+        raise RuntimeError("merge conflict bridge/x -> main")
+    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base", boom)
+    summary = ld.run_goal_loop(
+        goal="g", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]), b_tick=_b_verdict("accepted"),
+        merge_on_accept=True)
+    # A failed merge must NOT downgrade the accepted verdict.
+    assert summary["accepted"] is True
+    assert summary["merged"] is False
+    assert "merge conflict" in summary["merge_error"]
 
 
 # --- Task 7: rejected iterates, escalate escalates ---

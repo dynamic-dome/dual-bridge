@@ -576,7 +576,7 @@ def _escalate(loop_id, trigger, round_no, branch, commit, goal, done_criteria,
 
 def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                   round_timeout, interval=5, build_runner=None, b_tick=None,
-                  loop_id=None):
+                  loop_id=None, merge_on_accept=False):
     """Free work-loop toward an open goal (Stage 3). A builds (codex) on a
     stable loop branch toward `goal`; B reviews the diff against `done_criteria`
     (kind:review → accepted | rejected | escalate). accepted ends successfully.
@@ -599,12 +599,15 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
     final_commit = ""
     prev_commit = None
     prev_reason = None
+    merged = False
+    merge_error = ""
 
     def _summary():
         return {
             "loop_id": loop_id, "rounds_done": rounds_done, "accepted": accepted,
             "escalated": escalated, "escalation_trigger": escalation_trigger,
             "final_commit": final_commit, "final_branch": loop_branch,
+            "merged": merged, "merge_error": merge_error,
         }
 
     for round_no in range(max_rounds):
@@ -642,6 +645,28 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
 
         if out["verdict"] == "accepted":
             accepted = True
+            # Integrate the accepted build into base so the NEXT package's fresh
+            # clone sees it (cross-package accumulation). Opt-in: an experimental
+            # loop must not silently push to master. Fail-soft: a merge conflict /
+            # push reject is recorded but never downgrades the accepted verdict —
+            # the work succeeded, only its integration didn't (visible in summary).
+            if merge_on_accept:
+                workdir = STATE_DIR / "work" / loop_id
+                try:
+                    new_base = codex_adapter.merge_accepted_to_base(
+                        repo=repo, branch=loop_branch, base_branch=base_branch,
+                        workdir=workdir)
+                    merged = True
+                    append_state(loop_id, {"round": round_no, "side": "merge",
+                                           "merged_into": base_branch,
+                                           "base_head": new_base,
+                                           "status": "done"})
+                except Exception as exc:  # noqa: BLE001 — never crash on merge
+                    merge_error = str(exc)
+                    append_state(loop_id, {"round": round_no, "side": "merge",
+                                           "merged_into": base_branch,
+                                           "status": "error",
+                                           "error": merge_error})
             break
         if out["verdict"] == "escalate":
             escalated = True
@@ -905,6 +930,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", default=None,
                         help="goal-loop: resume an escalated loop by loop_id "
                              "(reuses the loop branch).")
+    parser.add_argument("--merge-on-accept", action="store_true",
+                        help="goal-loop: on accepted, merge the loop branch into "
+                             "--base-branch and push it, so the next package's "
+                             "fresh clone sees this build (cross-package "
+                             "accumulation). Fail-soft on conflict.")
     args = parser.parse_args(argv)
 
     # Resolve config-backed defaults (CLI flag wins if given; else env ->
@@ -986,11 +1016,18 @@ def main(argv: list[str] | None = None) -> int:
             goal=goal, done_criteria=criteria, repo=args.repo,
             base_branch=args.base_branch, max_rounds=args.max_rounds,
             round_timeout=args.round_timeout, interval=args.interval,
-            loop_id=loop_id)
+            loop_id=loop_id, merge_on_accept=args.merge_on_accept)
         print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
         if summary["accepted"]:
             print(f"    ACCEPTED auf {summary['final_branch']}@"
                   f"{summary['final_commit']}")
+            if args.merge_on_accept:
+                if summary.get("merged"):
+                    print(f"    MERGED -> {args.base_branch} (naechstes Paket "
+                          f"sieht diesen Build)")
+                else:
+                    print(f"    NICHT GEMERGT: {summary.get('merge_error') or '?'} "
+                          f"(accepted bleibt gueltig; Branch manuell mergen)")
             return 0
         if summary["escalated"]:
             print(f"    ESKALIERT ({summary['escalation_trigger']}) — "

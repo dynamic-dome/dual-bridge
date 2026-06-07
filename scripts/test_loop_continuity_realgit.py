@@ -160,3 +160,72 @@ def test_round2_builds_on_round1_commit(monkeypatch, tmp_path):
     content = (workdir / "f.txt").read_text(encoding="utf-8")
     assert "round1-line" in content, "round 2 lost round 1's work (continuity broken)"
     assert "round2-line" in content
+
+
+def test_merge_accepted_to_base_integrates_into_main(monkeypatch, tmp_path):
+    """An accepted loop branch's work must land in base after merge, so the NEXT
+    package's fresh clone of base sees it (cross-package accumulation, 2026-06-07
+    reminders-v2). Real local git: build on a loop branch, merge into main, then
+    assert origin/main carries the build and a fresh clone of main contains it."""
+    origin = _make_origin(tmp_path)
+    workroot = tmp_path / "wr"
+    workroot.mkdir()
+    line = ["paketA-line"]
+    _fake_codex_appends(monkeypatch, line)
+
+    # Build Paket A on its loop branch.
+    rA = ca.run_codex_task(auftrag="build A", repo=origin, base_branch="main",
+                           task_id="tA", workroot=workroot,
+                           branch="bridge/loop-A", workdir_name="loop-A")
+    assert rA.status == "done", rA.error_text
+
+    # main has NOT seen it yet.
+    probe = tmp_path / "probe-before"
+    subprocess.run(["git", "clone", "-b", "main", origin, str(probe)],
+                   check=True, capture_output=True)
+    assert "paketA-line" not in (probe / "f.txt").read_text(encoding="utf-8")
+
+    # Merge the accepted branch into main.
+    new_head = ca.merge_accepted_to_base(
+        repo=origin, branch="bridge/loop-A", base_branch="main",
+        workdir=workroot / "loop-A")
+    assert new_head, "merge returned no head"
+
+    # A FRESH clone of main now carries Paket A — the next package would see it.
+    probe2 = tmp_path / "probe-after"
+    subprocess.run(["git", "clone", "-b", "main", origin, str(probe2)],
+                   check=True, capture_output=True)
+    assert "paketA-line" in (probe2 / "f.txt").read_text(encoding="utf-8"), \
+        "accepted build did not accumulate into base after merge"
+
+
+def test_merge_accepted_to_base_conflict_raises(monkeypatch, tmp_path):
+    """A merge conflict must raise (fail-soft at the caller), NOT silently drop
+    the integration. We make base diverge from the loop branch on the same line
+    so git cannot auto-merge."""
+    origin = _make_origin(tmp_path)
+    workroot = tmp_path / "wr"
+    workroot.mkdir()
+    line = ["loop-change"]
+    _fake_codex_appends(monkeypatch, line)
+    rA = ca.run_codex_task(auftrag="build", repo=origin, base_branch="main",
+                           task_id="tA", workroot=workroot,
+                           branch="bridge/loop-A", workdir_name="loop-A")
+    assert rA.status == "done", rA.error_text
+
+    # Diverge main on the SAME file/line so the merge conflicts. f.txt currently
+    # ends 'base\n'; the loop appended 'loop-change'. Rewrite base's f.txt fully.
+    div = tmp_path / "div"
+    subprocess.run(["git", "clone", "-b", "main", origin, str(div)],
+                   check=True, capture_output=True)
+    _git(div, "config", "user.email", "t@t.local")
+    _git(div, "config", "user.name", "t")
+    (div / "f.txt").write_text("totally-different\n", encoding="utf-8")
+    _git(div, "add", "-A")
+    _git(div, "commit", "-m", "diverge")
+    _git(div, "push", "origin", "main")
+
+    import pytest
+    with pytest.raises(RuntimeError):
+        ca.merge_accepted_to_base(repo=origin, branch="bridge/loop-A",
+                                  base_branch="main", workdir=workroot / "loop-A")

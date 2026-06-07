@@ -143,6 +143,15 @@ def _stream_reader(pipe, echo_stream, sink: list) -> None:
             pass
 
 
+def _as_bool(v) -> bool:
+    """Parse a config/env flag to bool. config_value passes the env string or the
+    already-typed fallback (False); '1'/'true'/'yes'/'on' (any case) are true,
+    everything else — including '0'/'false'/'' — is false."""
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _real_run_fn(*, repo: str, seed: str, adapter: str,
                  max_rounds: int, round_timeout: int, stream: bool = False) -> dict:
     """Default-Runner: ruft loop_driver.py --mode goal-loop als Subprozess auf
@@ -171,6 +180,13 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         "--round-timeout", str(round_timeout),
         "--seed", seed,
     ]
+    # Opt-in cross-package accumulation: when DUAL_BRIDGE_MERGE_ON_ACCEPT is set
+    # (env > config.json key 'merge_on_accept' > off), an accepted build is merged
+    # into base so the next dependent package's fresh clone sees it. Off by default
+    # — a single independent job must not silently push to the target repo's base.
+    if bc.config_value("merge_on_accept", "DUAL_BRIDGE_MERGE_ON_ACCEPT", False,
+                       cast=_as_bool):
+        cmd.append("--merge-on-accept")
     cap = round_timeout * max_rounds + 120
     if not stream:
         proc = subprocess.run(

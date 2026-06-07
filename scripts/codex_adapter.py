@@ -559,6 +559,54 @@ def _git_commit_and_push(workdir: Path, branch: str, message: str) -> str:
     return commit_hash
 
 
+def merge_accepted_to_base(repo: str, branch: str, base_branch: str,
+                           workdir: Path) -> str:
+    """Merge an accepted loop branch into base_branch and push it.
+
+    Why: each loop clones fresh from base_branch, so a multi-package feature
+    where 'Paket B baut auf A' only works if A's accepted build is integrated
+    into base_branch BEFORE B's loop clones it. Without this the next package
+    re-clones a base that never saw the prior one and starts from scratch
+    (observed 2026-06-07, reminders-v2 A/B/C/D never accumulated).
+
+    Reuses the loop's existing workdir (origin + the accepted branch are already
+    there). Fetches, checks out base_branch tracking origin/base, merges the loop
+    branch with an explicit --no-ff merge commit, and pushes base. Returns the
+    short hash of the new base HEAD.
+
+    Fail-soft contract: raises RuntimeError on any git failure (merge conflict,
+    push reject, missing branch) so the caller can record 'accepted but NOT
+    merged' WITHOUT losing the accepted verdict. Never silently swallows a
+    conflict — an unmerged accept must be visible, not pretended."""
+    cred = _resolve_https_credential(repo)
+    try:
+        fetch = _run_git(workdir, "fetch", "origin", cred=cred)
+        if fetch.returncode != 0:
+            raise RuntimeError(f"fetch failed: {fetch.stderr.strip()}")
+        # Check out base tracking origin/base so the merge target is the remote
+        # tip, not a stale local copy. -B re-points an existing local base too.
+        co = _run_git(workdir, "checkout", "-B", base_branch,
+                      f"origin/{base_branch}", cred=cred)
+        if co.returncode != 0:
+            raise RuntimeError(f"checkout {base_branch} failed: {co.stderr.strip()}")
+        merge = _run_git(workdir, "merge", "--no-ff", branch,
+                         "-m", f"bridge: merge accepted {branch} into {base_branch}",
+                         cred=cred)
+        if merge.returncode != 0:
+            # Abort the half-done merge so the workdir is not left mid-conflict
+            # (the next round's clone_or_pull reset would otherwise trip over it).
+            _run_git(workdir, "merge", "--abort")
+            raise RuntimeError(f"merge conflict {branch} -> {base_branch}: "
+                               f"{merge.stdout.strip() or merge.stderr.strip()}")
+        rev = _run_git(workdir, "rev-parse", "--short", "HEAD")
+        push = _run_git(workdir, "push", "origin", base_branch, cred=cred)
+        if push.returncode != 0:
+            raise RuntimeError(f"push {base_branch} failed: {push.stderr.strip()}")
+        return rev.stdout.strip()
+    finally:
+        cred.cleanup()
+
+
 _DIFF_LIMIT = 60_000  # chars; over this we truncate the review payload honestly
 
 

@@ -721,6 +721,59 @@ def test_main_stream_env_reicht_stream_durch():
 
 
 # ---------------------------------------------------------------------------
+# (N) --merge-on-accept Verdrahtung: nur bei gesetzter Env-Var im loop_driver-cmd
+# ---------------------------------------------------------------------------
+
+def _capture_real_run_cmd(jp) -> list:
+    """Run _real_run_fn with subprocess.run stubbed; return the cmd it built."""
+    captured = {}
+
+    class _P:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    real = jp.subprocess.run
+    jp.subprocess.run = lambda cmd, **kw: captured.update(cmd=cmd) or _P()
+    try:
+        jp._real_run_fn(repo="https://x/y", seed="## Ziel\nz\n## Done-Kriterien\n- c",
+                        adapter="codex", max_rounds=3, round_timeout=600)
+    finally:
+        jp.subprocess.run = real
+    return captured["cmd"]
+
+
+def test_merge_on_accept_absent_by_default():
+    _fresh()
+    os.environ.pop("DUAL_BRIDGE_MERGE_ON_ACCEPT", None)
+    _, _, jp = _reload()
+    cmd = _capture_real_run_cmd(jp)
+    assert "--merge-on-accept" not in cmd
+
+
+def test_merge_on_accept_added_when_env_set():
+    _fresh()
+    os.environ["DUAL_BRIDGE_MERGE_ON_ACCEPT"] = "1"
+    try:
+        _, _, jp = _reload()
+        cmd = _capture_real_run_cmd(jp)
+        assert "--merge-on-accept" in cmd
+    finally:
+        os.environ.pop("DUAL_BRIDGE_MERGE_ON_ACCEPT", None)
+
+
+def test_merge_on_accept_false_string_is_off():
+    _fresh()
+    os.environ["DUAL_BRIDGE_MERGE_ON_ACCEPT"] = "false"
+    try:
+        _, _, jp = _reload()
+        cmd = _capture_real_run_cmd(jp)
+        assert "--merge-on-accept" not in cmd
+    finally:
+        os.environ.pop("DUAL_BRIDGE_MERGE_ON_ACCEPT", None)
+
+
+# ---------------------------------------------------------------------------
 # Dual-runnable Footer
 # ---------------------------------------------------------------------------
 
