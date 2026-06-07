@@ -255,9 +255,20 @@ claimed_at:
   `_errors/`-Quarantäne/Poller-Liveness je Lane, text+json, `--watch`. Schreibt nie.
 - ✅ **Eskalations-Notifier** (`bridge_notify.py`): benachrichtigt per Telegram bei
   neuen `ESCALATION-<id>.md`, lokal getriggert (Windows-Task), idempotent
-  (Dedup je `loop_id` über `state/_notify/sent.json`), at-least-once. Read-only
-  auf Eskalationen — schreibt nur den eigenen Sidecar-State. DCO-ready
-  (Kernlogik in `notify_new_escalations()`, nur der Caller ändert sich).
+  (Dedup je `notify_key` = `loop_id + reason`-Hash über `state/_notify/sent.json`),
+  at-least-once. Read-only auf Eskalationen — schreibt nur den eigenen
+  Sidecar-State. DCO-ready (Kernlogik in `notify_new_escalations()`, nur der
+  Caller ändert sich).
+  - **HTTP-Härtung der Sende-Kante:** Telegram-Fehler werden klassifiziert —
+    `4xx` (außer 429) und inhaltliche Ablehnung (`ok:false`) sind **permanent**
+    (keine Wiederholung, Eskalation wird `permanent_failed` im Sidecar
+    `state/_notify/attempts.json`, Exit-Code 3); `429`/`5xx`/Netzfehler sind
+    **transient** — der nächste Trigger-Lauf versucht es erneut, frühestens ab
+    `next_retry_at` (`Retry-After`-Header zuerst, sonst exponentielles Backoff,
+    max. `MAX_TRANSIENT_ATTEMPTS=6`). **Kein `sleep()` im Lauf** (Retry läuft
+    cross-trigger, der Prozess bleibt kurzlebig). Dedup über `loop_id + reason`
+    (`trigger|round`): verschärft sich eine Eskalation, gibt es genau **eine**
+    neue Benachrichtigung. `--reconcile` räumt `sent.json` und `attempts.json`.
 - ✅ **Overnight-Scheduler** (`bridge_overnight.py`): arbeitet nachts eine Queue
   vordefinierter goal-loop-Seeds (`docs/overnight/*.md`) seriell ab und sendet
   morgens **einen** Telegram-Digest (accepted/eskaliert/Fehler). Lokal getriggert
