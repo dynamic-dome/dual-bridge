@@ -1,6 +1,6 @@
 {
-  "round_timeout": 600,
-  "codex_timeout": 600,
+  "round_timeout": 1500,
+  "codex_timeout": 1500,
   "max_rounds": 4,
   "poll_interval": 5.0,
   "poller_interval": 15
