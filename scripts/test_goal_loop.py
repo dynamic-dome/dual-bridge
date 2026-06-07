@@ -570,6 +570,35 @@ def test_goal_loop_dangerous_diff_escalates(monkeypatch, tmp_path):
     assert meta["trigger"] == "dangerous_action"
 
 
+def test_goal_loop_dangerous_only_in_auftrag_does_not_escalate(monkeypatch, tmp_path):
+    """The deny-first guard scans the generated DIFF, not the auftrag. A reviewer
+    who merely TALKS about SQL in their reject reason ('die Fixture fuehrt ein
+    DELETE FROM reminders aus') must NOT trip the guard — that prose becomes part
+    of round 1's auftrag, and prose is not an executed action (False-Positive
+    2026-06-07, reminders Paket A loop ...0d59). A clean diff => review proceeds."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    from runners import RunnerResult
+
+    # Build produces a CLEAN diff, but the auftrag carries dangerous-looking prose.
+    def clean_build(auftrag, fm, workroot):
+        return RunnerResult(status="done", antwort="built", branch=fm["branch"],
+                            commit="c1", changed_files=["reminders.py"],
+                            diff="+def delete(rid):\n+    pass")
+
+    danger_auftrag = ("Ziel: x\n\nDone-Kriterien:\n- c\n\nDer Reviewer hat "
+                      "abgelehnt. Behebe:\nDie autouse-Fixture _reset_reminders "
+                      "fuehrt ein DELETE FROM reminders aus; DROP TABLE als Wort.")
+    out = ld._goal_build_review_round(
+        loop_id="loop-x", round_no=1, goal="x", done_criteria=["c"],
+        auftrag=danger_auftrag, repo="r", base_branch="main",
+        build_runner=clean_build, round_timeout=5, interval=1,
+        b_tick=lambda _t: _b_verdict("accepted")(_t))
+    # Guard must NOT fire on auftrag-only danger; the round proceeds to review.
+    assert out["status"] != "dangerous", \
+        f"guard fired on auftrag prose, not the diff: {out.get('abort_reason')}"
+
+
 # --- Task 10: CLI + resume validation ---
 
 def test_main_goal_loop_requires_repo(monkeypatch, tmp_path, capsys):

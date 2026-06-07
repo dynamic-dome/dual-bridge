@@ -395,7 +395,13 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
                 "abort_reason": f"A-build error: {a_res.error_text}",
                 "verdict": None, "verdict_reason": None, "commit": None,
                 "diff": "", "task_id": ""}
-    danger = scan_dangerous((a_res.diff or "") + "\n" + auftrag)
+    # Scan the generated DIFF only — never the auftrag. The guard protects against
+    # dangerous GENERATED CODE; the auftrag (seed + the prior round's reviewer
+    # reason) is input text, not an executed action. A reviewer who merely talks
+    # about SQL ("die Fixture fuehrt ein DELETE FROM aus") would otherwise trip the
+    # guard once that prose lands in round 1's auftrag (False-Positive 2026-06-07,
+    # reminders Paket A). Seed safety is the seed author's responsibility.
+    danger = scan_dangerous(a_res.diff or "")
     if danger is not None:
         return {"status": "dangerous", "abort_reason": f"dangerous: {danger}",
                 "verdict": None, "verdict_reason": None,
