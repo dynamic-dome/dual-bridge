@@ -104,6 +104,18 @@ def _parse_retry_after(value: str | None) -> int | None:
         return None
 
 
+def _reason_of(info) -> str:
+    """Stabiler Grund-String einer Eskalation, Basis des Dedup-Keys."""
+    return f"{info.trigger or ''}|{info.round or ''}"
+
+
+def _notify_key(info) -> str:
+    """loop_id + Hash(reason). Gleiche Eskalation mit geändertem trigger/round
+    -> neuer Key -> genau eine Re-Notification; unverändert -> gleicher Key."""
+    digest = hashlib.sha256(_reason_of(info).encode("utf-8")).hexdigest()[:12]
+    return f"{info.loop_id}:{digest}"
+
+
 # --- Konfiguration -----------------------------------------------------------
 def _telegram_config() -> tuple[str, str]:
     """(token, chat_id) aus der Env. Erste gesetzte Variable gewinnt:

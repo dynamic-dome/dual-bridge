@@ -396,6 +396,28 @@ def test_retry_after_http_date_parsed() -> None:
     print("  notify OK — Retry-After als HTTP-Datum geparst")
 
 
+# --- HTTP-Härtung: Dedup-Key ------------------------------------------------
+def test_notify_key_stable_for_same_reason() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    info = bs.EscalationInfo(loop_id="loop-x", trigger="stagnation", round="2")
+    k1 = bn._notify_key(info)
+    k2 = bn._notify_key(info)
+    assert k1 == k2
+    assert k1.startswith("loop-x:")
+    print("  notify OK — notify_key stabil bei gleichem reason")
+
+
+def test_notify_key_changes_with_reason() -> None:
+    _fresh()
+    bc, bs, bn = _reload()
+    a = bs.EscalationInfo(loop_id="loop-x", trigger="stagnation", round="2")
+    b = bs.EscalationInfo(loop_id="loop-x", trigger="max_rounds", round="4")
+    assert bn._notify_key(a) != bn._notify_key(b)
+    assert bn._notify_key(a).split(":")[0] == bn._notify_key(b).split(":")[0]
+    print("  notify OK — notify_key ändert sich bei neuem reason, loop_id-Präfix bleibt")
+
+
 def main() -> int:
     print("=== Eskalations-Notifier-Tests ===")
     tests = [
@@ -418,6 +440,9 @@ def main() -> int:
         test_network_error_classified_transient,
         test_200_ok_false_classified_permanent,
         test_retry_after_http_date_parsed,
+        # HTTP-Härtung: Dedup-Key
+        test_notify_key_stable_for_same_reason,
+        test_notify_key_changes_with_reason,
     ]
     failed = 0
     for t in tests:
