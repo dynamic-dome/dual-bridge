@@ -217,6 +217,67 @@ def test_scan_dangerous_flags_second_stmt_mass_delete(monkeypatch, tmp_path):
         "DELETE FROM users WHERE id = ?; DELETE FROM audit") is not None
 
 
+# --- Task 4d: a bare mass-delete inside a tests/ file is legit cleanup, not a
+# production wipe (False-Positive 2026-06-08, DCO-LAGE-001 #5d10: a test helper
+# `_reset()` ran `DELETE FROM events` against the conftest-isolated tmp DB and
+# tripped the bare DELETE-FROM guard). The guard scans the unified diff, which
+# carries the `+++ b/<path>` header per file — so a destructive SQL pattern under
+# a tests/ path is suppressed, while secret/force-push/rm-rf stay armed
+# everywhere and SQL wipes in PRODUCTION paths still escalate. ---
+
+def test_scan_dangerous_allows_mass_delete_in_tests_path(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    diff = (
+        "diff --git a/tests/test_lage.py b/tests/test_lage.py\n"
+        "--- a/tests/test_lage.py\n"
+        "+++ b/tests/test_lage.py\n"
+        "@@ -41,6 +42,7 @@ def _reset():\n"
+        '+    bconn.execute("DELETE FROM events")\n'
+        '+    bconn.execute("DELETE FROM prefs_rollup")\n'
+    )
+    assert ld.scan_dangerous(diff) is None
+
+
+def test_scan_dangerous_still_flags_mass_delete_in_prod_path(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # Same bare wipe, but in a production module -> must still escalate.
+    diff = (
+        "diff --git a/lage.py b/lage.py\n"
+        "--- a/lage.py\n"
+        "+++ b/lage.py\n"
+        "@@ -10,0 +11,1 @@ def purge():\n"
+        '+    conn.execute("DELETE FROM events")\n'
+    )
+    assert ld.scan_dangerous(diff) is not None
+
+
+def test_scan_dangerous_tests_path_does_not_disarm_secret(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A leaked secret in a tests/ file is STILL dangerous — the tests/ allowance
+    # only covers destructive SQL, never secret/force-push/rm-rf patterns.
+    diff = (
+        "diff --git a/tests/test_x.py b/tests/test_x.py\n"
+        "+++ b/tests/test_x.py\n"
+        "+TOKEN = 'sk-ant-abc123'\n"
+    )
+    assert ld.scan_dangerous(diff) is not None
+
+
+def test_scan_dangerous_mixed_diff_prod_wipe_after_tests(monkeypatch, tmp_path):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    # A multi-file diff: legit test cleanup in tests/, then a real wipe in a prod
+    # module. The prod wipe must still trip the guard despite the tests/ section.
+    diff = (
+        "diff --git a/tests/test_lage.py b/tests/test_lage.py\n"
+        "+++ b/tests/test_lage.py\n"
+        '+    bconn.execute("DELETE FROM events")\n'
+        "diff --git a/admin.py b/admin.py\n"
+        "+++ b/admin.py\n"
+        '+    conn.execute("DELETE FROM users")\n'
+    )
+    assert ld.scan_dangerous(diff) is not None
+
+
 # --- Task 5: write/read escalation ---
 
 def test_write_and_read_escalation_roundtrip(monkeypatch, tmp_path):

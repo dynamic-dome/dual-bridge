@@ -149,6 +149,35 @@ DANGEROUS_PATTERNS = [
 ]
 _DANGEROUS_RE = [re.compile(p, re.IGNORECASE) for p in DANGEROUS_PATTERNS]
 
+# Destructive-SQL patterns that are LEGITIMATE inside test files (a test wipes
+# the conftest-isolated tmp DB on purpose) but dangerous in production code. These
+# are suppressed only for tests/ diff sections; secret/force-push/rm-rf are NOT in
+# this set and stay armed everywhere. False-Positive 2026-06-08, DCO-LAGE-001
+# #5d10: a `_reset()` helper's bare `DELETE FROM events` tripped the guard.
+_SQL_DESTRUCTIVE_PATS = frozenset({
+    r"\bDROP\s+TABLE\b",
+    r"\bDELETE\s+FROM\b",
+})
+# A unified-diff target-path header (`+++ b/<path>` or `+++ <path>`). The `b/`
+# prefix is git's default; tolerate its absence (e.g. --no-prefix).
+_DIFF_TARGET_RE = re.compile(r"^\+\+\+\s+(?:b/)?(\S+)", re.MULTILINE)
+# A diff section boundary — git emits one `diff --git` line per file.
+_DIFF_GIT_RE = re.compile(r"^diff --git ", re.MULTILINE)
+
+
+def _is_test_path(path: str) -> bool:
+    """True if `path` is a test file/dir (cleanup SQL there hits the isolated tmp
+    DB, not production). Matches a top-level or nested `tests/` segment and the
+    `test_*.py` / `*_test.py` naming convention."""
+    p = path.replace("\\", "/").lstrip("./")
+    return (
+        p.startswith("tests/")
+        or "/tests/" in p
+        or p.rsplit("/", 1)[-1].startswith("test_")
+        or p.rsplit("/", 1)[-1].endswith("_test.py")
+    )
+
+
 _DELETE_FROM_PAT = r"\bDELETE\s+FROM\b"
 _DELETE_FROM_RE = re.compile(_DELETE_FROM_PAT, re.IGNORECASE)
 # A row-targeted CRUD delete: `DELETE FROM <tbl> WHERE ... <placeholder>` where
@@ -186,12 +215,10 @@ def _delete_from_is_safe(text: str) -> bool:
     return saw_delete
 
 
-def scan_dangerous(text: str) -> str | None:
-    """Return the first dangerous pattern found in `text`, or None if clean.
-    Deny-first: used by the goal-loop to escalate (NOT block) risky build
-    actions/diffs locally, without any cross-device gate roundtrip."""
-    if not text:
-        return None
+def _scan_segment(text: str, allow_destructive_sql: bool) -> str | None:
+    """Scan one body of text against every dangerous pattern. When
+    `allow_destructive_sql` is True (a tests/ diff section), destructive-SQL
+    patterns are skipped — secret/force-push/rm-rf stay armed regardless."""
     for pat, rx in zip(DANGEROUS_PATTERNS, _DANGEROUS_RE):
         if rx.search(text):
             # Allow legitimate parametrised CRUD deletes through the otherwise
@@ -199,7 +226,45 @@ def scan_dangerous(text: str) -> str | None:
             # the drift mirror; the exception lives here, not in the list).
             if pat == _DELETE_FROM_PAT and _delete_from_is_safe(text):
                 continue
+            # In a test file, a bare table wipe is isolated cleanup, not a prod
+            # delete — suppress only the destructive-SQL family there.
+            if allow_destructive_sql and pat in _SQL_DESTRUCTIVE_PATS:
+                continue
             return pat
+    return None
+
+
+def scan_dangerous(text: str) -> str | None:
+    """Return the first dangerous pattern found in `text`, or None if clean.
+    Deny-first: used by the goal-loop to escalate (NOT block) risky build
+    actions/diffs locally, without any cross-device gate roundtrip.
+
+    Diff-aware: when `text` is a unified diff, it is split per file section and a
+    destructive-SQL hit under a tests/ path is suppressed (cleanup against the
+    conftest-isolated tmp DB), while the same hit in a production path still
+    escalates. Non-diff text (raw SQL/prose) is scanned as one prod-grade
+    segment — unchanged behaviour."""
+    if not text:
+        return None
+    # Not a unified diff -> scan whole thing as production-grade (no allowance).
+    if not _DIFF_GIT_RE.search(text):
+        return _scan_segment(text, allow_destructive_sql=False)
+    # Split into per-file sections at each `diff --git` boundary, decide the
+    # tests/ allowance from each section's `+++ b/<path>` target header.
+    bounds = [m.start() for m in _DIFF_GIT_RE.finditer(text)]
+    bounds.append(len(text))
+    # Any preamble before the first `diff --git` (rare) is prod-grade.
+    if bounds[0] > 0:
+        hit = _scan_segment(text[:bounds[0]], allow_destructive_sql=False)
+        if hit is not None:
+            return hit
+    for start, end in zip(bounds, bounds[1:]):
+        section = text[start:end]
+        target = _DIFF_TARGET_RE.search(section)
+        is_test = bool(target) and _is_test_path(target.group(1))
+        hit = _scan_segment(section, allow_destructive_sql=is_test)
+        if hit is not None:
+            return hit
     return None
 
 
