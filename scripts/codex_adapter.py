@@ -613,6 +613,37 @@ def merge_accepted_to_base(repo: str, branch: str, base_branch: str,
         cred.cleanup()
 
 
+def push_branch_on_escalation(repo: str, branch: str, workdir: Path) -> bool:
+    """Push the loop branch to origin when a goal-loop escalates (exit 3).
+
+    Why: an escalated branch holds finished, often-mergeable code. The DCO-side
+    'Prüfen & Mergen' button fetches it from origin to gate-check + merge. Only
+    the ACCEPTED path pushed historically (merge_accepted_to_base), so an
+    escalated branch could live only locally on the builder (observed 2026-06-07,
+    reminders-D). Reuses the loop's workdir (origin + the branch are already
+    there) and the same GIT_ASKPASS credential handling as the accept-push so a
+    PRIVATE repo is not cloned anonymously under the hardened sandbox.
+
+    Best-effort contract: returns True on a successful push, False on ANY failure
+    (git error, missing branch, credential blow-up) — it NEVER raises. Escalation
+    must complete regardless; the DCO button falls back to a 'branch not on
+    origin' manual hint when the push did not land."""
+    try:
+        cred = _resolve_https_credential(repo)
+    except Exception:
+        return False
+    try:
+        push = _run_git(workdir, "push", "origin", f"{branch}:{branch}", cred=cred)
+        return push.returncode == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            cred.cleanup()
+        except Exception:
+            pass
+
+
 _DIFF_LIMIT = 60_000  # chars; over this we truncate the review payload honestly
 
 

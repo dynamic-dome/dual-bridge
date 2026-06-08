@@ -470,6 +470,47 @@ def test_goal_loop_reviewer_escalate(monkeypatch, tmp_path):
     assert meta["trigger"] == "reviewer_requested"
 
 
+def test_goal_loop_escalation_pushes_loop_branch(monkeypatch, tmp_path):
+    """On escalation the loop branch is pushed to origin (so the DCO 'Prüfen &
+    Mergen' button can fetch it). push_branch_on_escalation is called with the
+    loop branch, and the result lands in the summary as escalation_pushed."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    pushed = {}
+
+    def fake_push(repo, branch, workdir):
+        pushed["repo"] = repo
+        pushed["branch"] = branch
+        return True
+
+    monkeypatch.setattr(ld.codex_adapter, "push_branch_on_escalation", fake_push)
+    summary = ld.run_goal_loop(
+        goal="G", done_criteria=["ambiguous one"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]),
+        b_tick=_b_verdict("escalate", reason="criterion is ambiguous"))
+    assert summary["escalated"] is True
+    assert pushed.get("branch") == summary["final_branch"]
+    assert pushed.get("repo") == "r"
+    assert summary["escalation_pushed"] is True
+
+
+def test_goal_loop_accepted_does_not_push_escalation(monkeypatch, tmp_path):
+    """An accepted loop must NOT trigger the escalation push (only escalations)."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    called = {"push": False}
+    monkeypatch.setattr(ld.codex_adapter, "push_branch_on_escalation",
+                        lambda **k: called.__setitem__("push", True) or True)
+    summary = ld.run_goal_loop(
+        goal="g", done_criteria=["c"], repo="r", base_branch="main",
+        max_rounds=3, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]), b_tick=_b_verdict("accepted"))
+    assert summary["accepted"] is True
+    assert called["push"] is False
+    assert summary["escalation_pushed"] is False
+
+
 def _b_verdict_body_only(verdict, body_reason):
     """A b_tick that mirrors the REAL handoff_poll result: parse_verdict leaves
     verdict_reason empty for a bare verdict, so the reviewer's reasoning lives

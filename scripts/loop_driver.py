@@ -672,6 +672,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
     prev_reason = None
     merged = False
     merge_error = ""
+    escalation_pushed = False
 
     def _summary():
         return {
@@ -679,6 +680,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
             "escalated": escalated, "escalation_trigger": escalation_trigger,
             "final_commit": final_commit, "final_branch": loop_branch,
             "merged": merged, "merge_error": merge_error,
+            "escalation_pushed": escalation_pushed,
         }
 
     for round_no in range(max_rounds):
@@ -794,6 +796,19 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                   reason=f"max-rounds ({max_rounds}) erreicht ohne accepted.",
                   question="Mehr Runden noetig? --resume (max_rounds darf "
                            "unveraendert bleiben) oder Seed schaerfen.")
+
+    # On ANY escalation trigger, push the loop branch to origin so the DCO-side
+    # 'Prüfen & Mergen' button can fetch + gate-check it. One place catches all
+    # six triggers (each sets escalated=True + break). Best-effort: a failed push
+    # never downgrades the escalation — the DCO button falls back to a manual
+    # hint. Mirrors the accept-push credential handling.
+    if escalated:
+        workdir = STATE_DIR / "work" / loop_id
+        try:
+            escalation_pushed = codex_adapter.push_branch_on_escalation(
+                repo=repo, branch=loop_branch, workdir=workdir)
+        except Exception:  # noqa: BLE001 — never crash on the escalation push
+            escalation_pushed = False
     return _summary()
 
 
