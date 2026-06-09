@@ -45,28 +45,21 @@ def _fake_codex_appends(monkeypatch, line_holder):
     Discrimination is on the binary name (cmd[0] ends with 'codex' or
     'codex.exe'), NOT on a positional token like cmd[1]=='exec', which would
     silently pass through a renamed or path-extended binary."""
-    real_run = ca.subprocess.run  # captured BEFORE monkeypatch replaces it
-
-    def fake_run(cmd, **kw):
-        # Only intercept the codex binary; let every real git command run.
-        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
-        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
-            return real_run(cmd, **kw)
-        cwd = kw.get("cwd")
-        workdir = Path(cwd)
+    # Patch the codex-exec SEAM (_run_codex_exec), not subprocess.run: the adapter
+    # now drives codex via subprocess.Popen + tree-kill (2026-06-09), so a
+    # subprocess.run mock would no longer intercept it. _run_codex_exec is the
+    # stable boundary — git keeps running for real, only the codex call is faked.
+    def fake_exec(cmd, workdir, auftrag, timeout):
+        workdir = Path(workdir)
         f = workdir / "f.txt"
         f.write_text(f.read_text(encoding="utf-8") + line_holder[0] + "\n",
                      encoding="utf-8")
-        class _P:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
         for i, tok in enumerate(cmd):
             if tok == "-o":
                 Path(cmd[i + 1]).write_text("done", encoding="utf-8")
-        return _P()
+        return ca.subprocess.CompletedProcess(cmd, 0, "ok", "")
 
-    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca, "_run_codex_exec", fake_exec)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
 
@@ -78,30 +71,21 @@ def _fake_codex_self_commits(monkeypatch, line_holder):
     seam that broke the live seed-02 round-2 review (2026-06-03): the adapter
     decided "no change" from `git status --porcelain` and returned commit=None,
     diff='' even though codex really had committed real work."""
-    real_run = ca.subprocess.run
-
-    def fake_run(cmd, **kw):
-        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
-        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
-            return real_run(cmd, **kw)
-        cwd = kw.get("cwd")
-        workdir = Path(cwd)
+    # Patch the codex-exec seam (see _fake_codex_appends for why).
+    def fake_exec(cmd, workdir, auftrag, timeout):
+        workdir = Path(workdir)
         f = workdir / "f.txt"
         f.write_text(f.read_text(encoding="utf-8") + line_holder[0] + "\n",
                      encoding="utf-8")
         # codex 0.136 self-commits → working tree clean afterwards.
         _git(workdir, "add", "-A")
         _git(workdir, "commit", "-m", "codex self-commit")
-        class _P:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
         for i, tok in enumerate(cmd):
             if tok == "-o":
                 Path(cmd[i + 1]).write_text("done", encoding="utf-8")
-        return _P()
+        return ca.subprocess.CompletedProcess(cmd, 0, "ok", "")
 
-    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca, "_run_codex_exec", fake_exec)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
 

@@ -25,7 +25,10 @@ def test_run_codex_task_uses_branch_override(monkeypatch, tmp_path):
     monkeypatch.setattr(ca, "_git_clone_or_pull", fake_clone)
     monkeypatch.setattr(ca, "_git_checkout_branch", fake_checkout)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+    # subprocess.run mock keeps _resolve_base_branch's git probes stubbed; the
+    # codex call now goes through the _run_codex_exec seam (Popen + tree-kill).
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
     monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])  # no changes → no commit
 
@@ -51,6 +54,7 @@ def test_run_codex_task_defaults_to_task_branch(monkeypatch, tmp_path):
         stdout = "done"
         stderr = ""
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
     monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])
 
@@ -146,6 +150,7 @@ def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
         stdout = "ok"
         stderr = ""
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
     monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: ["scripts/runners.py"])
     monkeypatch.setattr(ca, "_git_commit_and_push", lambda w, b, m: "abc123")

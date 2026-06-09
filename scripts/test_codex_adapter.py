@@ -192,6 +192,157 @@ def test_parse_real_codex_0136_ndjson_sequence() -> None:
     print("  codex OK — REAL codex-0.136 NDJSON sequence -> item.text answer")
 
 
+def test_kill_process_tree_windows_uses_taskkill_tree() -> None:
+    """On Windows, killing a timed-out codex MUST kill the WHOLE tree.
+
+    The live hang (2026-06-09): a goal-loop's `codex exec` ran ~50 min past its
+    600s timeout because subprocess.run(timeout=)'s kill hits only the direct
+    child (the node launcher), while the real worker codex.exe is its GRANDCHILD
+    and survives — holding the worker slot forever. _kill_process_tree must use
+    `taskkill /T /F /PID <pid>` (Win32 snapshot walks the parent->child tree)
+    rather than a single TerminateProcess, so node + codex.exe + the spawned MCP
+    node/npx children all die together. This pins the /T (tree) + /F (force)."""
+    import codex_adapter as cx
+    importlib.reload(cx)
+
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        class _R:  # minimal CompletedProcess stand-in
+            returncode = 0
+        return _R()
+
+    orig_run = cx.subprocess.run
+    orig_name = cx.os.name
+    try:
+        cx.subprocess.run = fake_run
+        cx.os.name = "nt"
+        cx._kill_process_tree(4242)
+    finally:
+        cx.subprocess.run = orig_run
+        cx.os.name = orig_name
+
+    assert calls, "kill must invoke a subprocess (taskkill)"
+    cmd = calls[-1]
+    assert cmd[0].lower().startswith("taskkill"), cmd
+    assert "/T" in cmd, f"missing tree flag /T: {cmd}"
+    assert "/F" in cmd, f"missing force flag /F: {cmd}"
+    assert "4242" in cmd, f"PID not passed to taskkill: {cmd}"
+    print("  codex OK — _kill_process_tree uses taskkill /T /F on Windows")
+
+
+def test_codex_timeout_kills_grandchild_process() -> None:
+    """End-to-end proof: when `codex exec` exceeds its timeout, NO descendant
+    survives. Uses a fake 'codex' that spawns a long-lived grandchild and then
+    sleeps far past the (tiny) timeout. After run_codex_task returns the timeout
+    error, the grandchild PID must be dead — proving the tree-kill, not just the
+    direct child, fired. Guards the exact failure observed live 2026-06-09.
+
+    Skipped on non-Windows only if psutil is unavailable for liveness checks;
+    the kill itself is platform-generic (taskkill on nt, killpg elsewhere)."""
+    import os
+    import subprocess as sp
+    import sys
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import codex_adapter as cx
+    importlib.reload(cx)
+
+    # A fake codex: print our own PID, spawn a detached grandchild that sleeps
+    # 120s, then sleep 120s ourselves so the parent codex outlives the timeout.
+    # The grandchild writes its PID to a file so the test can check liveness.
+    work = Path(tempfile.mkdtemp(prefix="killtree-"))
+    pidfile = work / "grandchild.pid"
+    gc_script = work / "gc.py"
+    gc_script.write_text(
+        "import os,sys,time\n"
+        f"open(r'{pidfile}','w').write(str(os.getpid()))\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    fake_codex = work / "fakecodex.py"
+    fake_codex.write_text(
+        "import subprocess,sys,time,os\n"
+        f"subprocess.Popen([sys.executable, r'{gc_script}'])\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+
+    # run_codex_task expects a codex *executable*; we wrap python+script as the
+    # codex_bin by writing a launcher. On Windows a .cmd, else an sh shebang.
+    if os.name == "nt":
+        launcher = work / "codex.cmd"
+        launcher.write_text(
+            f'@echo off\r\n"{sys.executable}" "{fake_codex}" %*\r\n', encoding="utf-8"
+        )
+    else:
+        launcher = work / "codex"
+        launcher.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{fake_codex}" "$@"\n', encoding="utf-8"
+        )
+        os.chmod(launcher, 0o755)
+
+    # Build a throwaway local git repo as the "remote" so the clone succeeds fast
+    # and the run reaches the codex-exec step (where the timeout fires).
+    remote = work / "remote.git"
+    sp.run(["git", "init", "--bare", str(remote)], check=True,
+           capture_output=True)
+    seed = work / "seed"
+    sp.run(["git", "init", str(seed)], check=True, capture_output=True)
+    (seed / "x.txt").write_text("hi", encoding="utf-8")
+    for args in (["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t",
+                                 "commit", "-m", "init"],
+                 ["branch", "-M", "main"],
+                 ["remote", "add", "origin", str(remote)],
+                 ["push", "origin", "main"]):
+        sp.run(["git", "-C", str(seed)] + args, check=True, capture_output=True)
+
+    result = cx.run_codex_task(
+        auftrag="irrelevant",
+        repo=str(remote),
+        base_branch="main",
+        task_id="killtree-test",
+        workroot=work / "wr",
+        codex_bin=str(launcher),
+        timeout=3,  # tiny: codex sleeps 120s -> guaranteed TimeoutExpired
+    )
+
+    assert result.status == "error", result
+    assert "timeout" in (result.error_text or "").lower(), result.error_text
+
+    # The grandchild must be dead. Give the OS a beat to reap.
+    time.sleep(1.5)
+    assert pidfile.exists(), "fake codex never spawned its grandchild"
+    gc_pid = int(pidfile.read_text().strip())
+    alive = _pid_alive(gc_pid)
+    assert not alive, (
+        f"grandchild PID {gc_pid} SURVIVED the codex timeout — tree-kill failed "
+        "(this is exactly the 2026-06-09 slot-blocking hang)"
+    )
+    print("  codex OK — codex timeout kills the whole process tree (grandchild dead)")
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this PID is currently running (best-effort, no deps)."""
+    import os
+    import subprocess as sp
+    if os.name == "nt":
+        out = sp.run(["tasklist", "/FI", f"PID eq {pid}"],
+                     capture_output=True, text=True,
+                     encoding="utf-8", errors="ignore")
+        return str(pid) in (out.stdout or "")
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def main() -> int:
     print("=== QW1 Codex-Adapter NDJSON-Tests ===")
     tests = [
@@ -207,6 +358,8 @@ def main() -> int:
         test_parse_ndjson_unknown_answer_type_is_not_dropped,
         test_parse_pretty_printed_json_array_not_misread_as_ndjson,
         test_parse_real_codex_0136_ndjson_sequence,
+        test_kill_process_tree_windows_uses_taskkill_tree,
+        test_codex_timeout_kills_grandchild_process,
     ]
     failed = 0
     for t in tests:

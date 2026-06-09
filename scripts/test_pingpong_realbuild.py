@@ -69,28 +69,21 @@ def _make_origin(tmp_path) -> str:
 def _fake_codex_self_commits(monkeypatch, line_holder):
     """Fake codex: append the current line to f.txt and self-commit (codex 0.136
     under danger-full-access). Delegates every non-codex command to real git."""
-    real_run = ca.subprocess.run
-
-    def fake_run(cmd, **kw):
-        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
-        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
-            return real_run(cmd, **kw)
-        workdir = Path(kw.get("cwd"))
+    # Patch the codex-exec seam (_run_codex_exec), not subprocess.run: the adapter
+    # now drives codex via Popen + tree-kill (2026-06-09). git keeps running real.
+    def fake_exec(cmd, workdir, auftrag, timeout):
+        workdir = Path(workdir)
         f = workdir / "f.txt"
         f.write_text(f.read_text(encoding="utf-8") + line_holder[0] + "\n",
                      encoding="utf-8")
         _git(workdir, "add", "-A")
         _git(workdir, "commit", "-m", f"codex {line_holder[0]}")
-        class _P:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
         for i, tok in enumerate(cmd):
             if tok == "-o":
                 Path(cmd[i + 1]).write_text(f"built {line_holder[0]}", encoding="utf-8")
-        return _P()
+        return ca.subprocess.CompletedProcess(cmd, 0, "ok", "")
 
-    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca, "_run_codex_exec", fake_exec)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
 
@@ -161,18 +154,16 @@ def _fake_codex_builds_next_step(monkeypatch):
     (after round 0 the builder receives the other side's prose answer, not the
     seed, so it can't know what to build)."""
     import re
-    real_run = ca.subprocess.run
 
-    def fake_run(cmd, **kw):
-        exe = str(cmd[0]) if isinstance(cmd, (list, tuple)) and cmd else ""
-        if not (exe.endswith("codex") or exe.endswith("codex.exe")):
-            return real_run(cmd, **kw)
+    # Patch the codex-exec seam (_run_codex_exec): the adapter now drives codex via
+    # Popen + tree-kill (2026-06-09). The auftrag arrives as a direct parameter
+    # here (the real seam forwards it to codex via stdin, rule 10.8/P008).
+    def fake_exec(cmd, workdir, auftrag, timeout):
         # Only build when the task text actually asks for a step_<N> chain. If the
         # auftrag is the other side's prose answer (the bug), build nothing — the
         # commit then carries no new step and the round produces no progress.
-        # The real runner passes the auftrag via stdin (input=, rule 10.8/P008).
-        auftrag = kw.get("input") or ""
-        workdir = Path(kw.get("cwd"))
+        auftrag = auftrag or ""
+        workdir = Path(workdir)
         f = workdir / "pingpong_chain.py"
         existing = f.read_text(encoding="utf-8") if f.exists() else ""
         builds_chain = "step_" in auftrag and "pingpong_chain.py" in auftrag
@@ -186,18 +177,14 @@ def _fake_codex_builds_next_step(monkeypatch):
                          encoding="utf-8")
             _git(workdir, "add", "-A")
             _git(workdir, "commit", "-m", f"Add ping-pong step {nxt}")
-        class _P:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
         for i, tok in enumerate(cmd):
             if tok == "-o":
                 Path(cmd[i + 1]).write_text(
                     f"built step (auftrag_had_chain={builds_chain})",
                     encoding="utf-8")
-        return _P()
+        return ca.subprocess.CompletedProcess(cmd, 0, "ok", "")
 
-    monkeypatch.setattr(ca.subprocess, "run", fake_run)
+    monkeypatch.setattr(ca, "_run_codex_exec", fake_exec)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
 
