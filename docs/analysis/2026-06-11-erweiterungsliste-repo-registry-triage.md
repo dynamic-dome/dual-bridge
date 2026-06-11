@@ -141,11 +141,42 @@ Fehlschlag ist normal, nicht systematisch) — die Autoqueue-Selbstheilung + der
 Falls ein Code-Task >2 Anläufe braucht: Seed kleiner schneiden (zu groß für einen
 headless-codex-Durchlauf), nicht endlos retrien.
 
-## 6. Nächste Schritte
+## 6. Welle-2-Ergebnis (2026-06-11, abgeschlossen)
 
-1. repo-registry.md korrigieren (2 Punkte aus §1) und in den Space zurückgeben.
-2. Welle 2 seeden (1.1 Lane-Health, 2.2 Digest, 4.5 E2E-Smoke, 1.5 Metriken, 1.7
-   bridge-replay-CI mit ubuntu-Grün-Auflage).
-3. Design-Session 2.5 (Risk-Mapping) als nächste interaktive Arbeit einplanen.
-4. Stichprobe: die 3 neuen READMEs (ToDoDcO/pulse/tools-lab) lesen — Doku-Tasks
-   sind anfällig für plausibel-klingende aber unbelegte Claims (P006/L1).
+Von den 5 Welle-2-Punkten waren 3 sauber bridge-baubar; 2 sind Ops/interaktiv
+(nicht blind seedbar):
+
+| Todo | Erw. | Repo | Ergebnis |
+|---|---|---|---|
+| #7883 Bridge-Digest | 2.2 | DCO | 1. Anlauf accepted, aber Auto-Merge-Race → manuell gemergt (`1aa4bea`) |
+| #7884 Lane-Health | 1.1 | dual-bridge | 1. Anlauf, auto-gemergt+verifiziert (`d9ac32b`) |
+| #7885 Bridge-Metriken | 1.5 | dual-bridge | 1. Anlauf, auto-gemergt+verifiziert (`6005569`) |
+
+**NICHT geseedet (bewusst, interaktiver Vorlauf nötig):**
+- **4.5 E2E-Smoke-Cron** — `latency_probe.py` existiert bereits; der echo-Roundtrip
+  braucht beide Endpunkte LIVE zum Testen + dry-run-pflichtige Scheduled-Task-
+  Aktivierung. Kein headless-Build.
+- **1.7 bridge-replay-CI** — Triage-Auflage „erst ubuntu-Grün beweisen" (Lehre
+  #7846) kann ein headless-Worker nicht selbst erfüllen.
+
+**Auto-Merge-Race (neuer Befund, wichtig):** `accepted`/`done=1` heißt NICHT
+„auf master". Bei #7883 scheiterte der Auto-Merge fail-soft an einem
+CHANGELOG-Konflikt, weil der idea-feeder-Loop parallel master bewegte (Race
+zwischen Loop-Klon und Merge-Versuch). Der Build lag nur auf dem Loop-Branch;
+das done-Flag stand trotzdem. NUR der G-pattern-005-Merge-Check (echtes
+`git grep` auf origin/<base>) fing es. Konsequenz: Nach jedem `accepted` den
+TATSÄCHLICHEN Merge verifizieren, nicht dem done-Flag trauen — besonders im
+DCO-Repo (paralleler idea-feeder-Push). dual-bridge-Repo merged sauber (kein
+Dauer-Loop). Manueller Merge = die dokumentierte fail-soft-Klausel
+(„Branch manuell mergen"); digest.py merged automatisch, nur CHANGELOG
+brauchte Handarbeit (CHANGELOG-Konflikt ist der Normalfall bei parallelen Bridge-Merges).
+
+## 7. Nächste Schritte
+
+1. repo-registry.md korrigieren: jetzt **3 Punkte** — dual-bridge (Stage 2a→Stufe 3),
+   pulse (Beschreibung), UND ToDoDcO (ist kein ToDo-Tool, sondern Sandbox-Worktree
+   `sandbox.py` + `ISSUES2FIX.md` — von der generierten README ground-truth belegt).
+2. Interaktive Folge-Themen: 4.5 E2E-Smoke (Ops), 1.7 bridge-replay-CI (ubuntu zuerst),
+   Design-Session 2.5 Risk-Mapping, 2.1 `/bridge`-Command, 1.6 Adapter-Gerüst.
+3. Stichprobe Welle-1-READMEs: durchgeführt, alle 3 sauber + belegt (kein
+   Halluzinations-Fund); ToDoDcO-README deckte sogar den registry-Fehler auf.
