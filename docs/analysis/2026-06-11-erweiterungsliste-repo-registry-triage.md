@@ -118,10 +118,34 @@ Reihenfolge-Empfehlung:
   (Memory `venv-launcher-is-not-a-duplicate-instance`); echter Stillstand kam vom
   Cockpit-Toggle-OFF (09:57).
 
-## 5. Nächste Schritte
+## 5. Welle-1-Ergebnis (2026-06-11, abgeschlossen)
 
-1. Welle 1 (#7877–#7882) durchlaufen lassen; Ergebnisse stichprobenartig
-   artefakt-verifizieren (accepted ≠ merged, G-pattern-005).
-2. repo-registry.md korrigieren (2 Punkte aus §1) und in den Space zurückgeben.
-3. Welle 2 seeden, sobald Welle 1 durch ist.
-4. Design-Session 2.5 (Risk-Mapping) als nächste interaktive Arbeit einplanen.
+Alle 6 Todos erledigt. Ablauf-Erkenntnisse:
+
+| Todo | Repo | Ergebnis |
+|---|---|---|
+| #7877 Secrets-Gate | dual-bridge | Gate-vs-Gate (§3.4) → interaktiv per TDD gebaut (`2e0d11c`) |
+| #7878 Gate-Linter | skill-index | 1 Fehlschlag (leerer Build) → Retry baute, gemergt |
+| #7879 Mutation-Tests | bridge-replay | 1 Fehlschlag (leerer Build, ~26 Min) → Retry baute, gemergt |
+| #7880 README | ToDoDcO | 1. Anlauf, gemergt |
+| #7881 README | pulse | 1. Anlauf, gemergt |
+| #7882 README | tools-lab | 1. Anlauf, gemergt |
+
+**Retry-Muster (neuer Befund):** Fremd-Repo-CODE-Tasks (Linter, Mutation-Tests)
+eskalierten beide im ersten Anlauf mit `stagnation` Runde 0 = leerer Build (der
+headless codex-Worker auf Laptop A produzierte keinen Diff), bauten aber im
+automatischen Autoqueue-Retry sauber. DOKU-Tasks (READMEs) liefen alle im ersten
+Anlauf durch. Konsequenz: Fremd-Repo-Code-Tasks brauchen Retry-Toleranz (1
+Fehlschlag ist normal, nicht systematisch) — die Autoqueue-Selbstheilung + der
+#7866-`empty_branch`-Guard fangen das zuverlässig auf, kein manueller Fix nötig.
+Falls ein Code-Task >2 Anläufe braucht: Seed kleiner schneiden (zu groß für einen
+headless-codex-Durchlauf), nicht endlos retrien.
+
+## 6. Nächste Schritte
+
+1. repo-registry.md korrigieren (2 Punkte aus §1) und in den Space zurückgeben.
+2. Welle 2 seeden (1.1 Lane-Health, 2.2 Digest, 4.5 E2E-Smoke, 1.5 Metriken, 1.7
+   bridge-replay-CI mit ubuntu-Grün-Auflage).
+3. Design-Session 2.5 (Risk-Mapping) als nächste interaktive Arbeit einplanen.
+4. Stichprobe: die 3 neuen READMEs (ToDoDcO/pulse/tools-lab) lesen — Doku-Tasks
+   sind anfällig für plausibel-klingende aber unbelegte Claims (P006/L1).
