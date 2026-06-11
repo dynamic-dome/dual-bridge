@@ -193,6 +193,27 @@ fälschlich als laufender Poller gilt (Stale-PID-Schutz).
 **Wichtig für Laptop B:** Prüfe zuerst, ob der Google-Drive-Mount denselben
 Laufwerksbuchstaben (`G:`) hat. Falls nicht, setze `DUAL_BRIDGE_ROOT`.
 
+## Lane-Health
+
+`scripts/bridge_health.py` ist ein strikt read-only Health-Check für die
+Richtungslanes. Er nutzt die bestehende Lane-Lese-Logik aus `bridge_status.py`,
+zählt offene und geclaimte Tasks sowie `_errors/` je Lane und meldet Findings,
+wenn der älteste offene Task älter als der Schwellwert ist oder die
+`_errors/`-Anzahl den Schwellwert überschreitet.
+
+```bash
+cd scripts
+python bridge_health.py --format text
+python bridge_health.py --format json
+```
+
+Exit-Code `0` bedeutet keine Findings, Exit-Code `1` bedeutet mindestens ein
+Finding. Defaults sind config-fähig über `lane_health_max_age_s` /
+`lane_health_max_errors` in `config.json` oder per Env-Override
+`DUAL_BRIDGE_LANE_HEALTH_MAX_AGE_S` /
+`DUAL_BRIDGE_LANE_HEALTH_MAX_ERRORS`; ein Config-Eintrag ist nicht Pflicht.
+Der Check sendet keine Telegram-Nachrichten und schreibt/claimt/verschiebt nie.
+
 ## Task-Protokoll
 
 ```yaml
