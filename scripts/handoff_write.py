@@ -15,6 +15,7 @@ import argparse
 import sys
 
 import bridge_common as bc
+import secret_gate
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Which runner the receiver should use.")
     parser.add_argument("--to", default="",
                         help="Target endpoint (default: the peer of my endpoint).")
+    parser.add_argument("--allow-secrets", action="store_true",
+                        help="Bewusste Ausnahme: Secrets-Gate fuer diesen Task "
+                             "ueberspringen (Manifest: keine Secrets in Tasks).")
     args = parser.parse_args(argv)
 
     bc.ensure_dirs()
@@ -78,8 +82,22 @@ def main(argv: list[str] | None = None) -> int:
         "## Ergebnis\n"
         "<wird vom Empfänger gefüllt>\n"
     )
+    document = bc.build_document(frontmatter, body)
+    if not args.allow_secrets:
+        findings = secret_gate.scan_text(document)
+        if findings:
+            for f in findings:
+                print(f"[secret-gate] {f.kind}: {f.excerpt}", file=sys.stderr)
+            print(
+                f"[{me}] Task NICHT geschrieben — {len(findings)} "
+                "Secret-Verdacht(e) im Task-Text (Manifest: keine Secrets in "
+                "Tasks). Bewusste Ausnahme: --allow-secrets.",
+                file=sys.stderr,
+            )
+            return 2
+
     out_path = bc.lane_outbox(lane) / f"task-{task_id}.md"
-    bc.write_text_utf8(out_path, bc.build_document(frontmatter, body))
+    bc.write_text_utf8(out_path, document)
     print(f"[{me}] Task → lane-{lane}/outbox/{out_path.name} (adapter={args.adapter}, to={to})")
     return 0
 

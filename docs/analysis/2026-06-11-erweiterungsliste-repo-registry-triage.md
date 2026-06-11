@@ -33,7 +33,7 @@ Verdikt-Verteilung: **13 übernehmen · 4 umbauen/erweitern · 3 verwerfen · 4 
 
 | Todo | Erw. | Inhalt | Repo |
 |---|---|---|---|
-| #7877 | 1.4 | Secrets-Pre-Send-Gate (`scripts/secret_gate.py:scan_text`, Regex + Shannon-Entropie, stdlib-only) | dual-bridge |
+| #7877 | 1.4 | Secrets-Pre-Send-Gate — **nachträglich aus der Bridge genommen und interaktiv gebaut** (siehe §3 Punkt 4: Gate-vs-Gate) | dual-bridge |
 | #7878 | 3.4 | Gate-Linter für SKILL.md (`lint_gates.py:lint_all`, nutzt bestehenden Index-Parser) | skill-index |
 | #7879 | 1.8 | Mutation-Tests (5 Mutationsklassen + Whitespace-Kontrolle gegen False-Positives) | bridge-replay |
 | #7880 | 4.2 | README generieren (nur code-belegbare Claims) | ToDoDcO |
@@ -97,6 +97,15 @@ Reihenfolge-Empfehlung:
    vorhanden (`495966d`).
 3. **DoD immer diff-prüfbar formulieren** (kein Browser/visuell für headless Worker) —
    Pattern P017; der Empty-State-Vorfall (#7863, Job bb3310326376) war genau diese Klasse.
+4. **Gate-vs-Gate: Security-Tooling-Bau ist nicht bridge-fähig.** Der erste
+   #7877-Lauf eskalierte in Runde 0 mit `dangerous_action`: Ein Secret-Scanner-Bau
+   erzeugt zwangsläufig Secret-Regexe + Fake-Token-Fixtures im Diff, und der
+   deny-first-Wächter des Goal-Loops (`loop_driver.DANGEROUS_PATTERNS`, Secret-
+   Familie „armed everywhere") matcht genau diese. Konsequenz: Tasks, deren
+   ARTEFAKT selbst Gefahr-Muster enthält (Security-Scanner, Wächter-Regeln,
+   Destruktiv-SQL-Tooling), interaktiv bauen — nicht über die Bridge.
+   #7877 wurde entsprechend umgetaggt und am 2026-06-11 interaktiv per TDD
+   gebaut (`scripts/secret_gate.py` + `handoff_write`-Integration, 378 Tests grün).
 
 ## 4. Begleit-Ereignisse der Umsetzung (2026-06-11)
 

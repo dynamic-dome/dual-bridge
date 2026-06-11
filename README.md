@@ -234,6 +234,18 @@ claimed_at:
   Intervall-Poll weiter.
 - **Sibling-Surrender-Cleanup** gegen doppelte Claims desselben `task_id`.
 - **Never-crash-Poller:** ein einzelner kaputter Task reißt die Schleife nicht ab.
+- **Secrets-Gate (Pre-Send):** `handoff_write.py` scannt das komplette
+  Task-Dokument VOR dem Schreiben in die Outbox (`scripts/secret_gate.py`):
+  Format-Detektoren für bekannte Token-Shapes (Telegram-Bot-Token, GitHub
+  `ghp_`/`github_pat_`, `sk-`-Modellkeys, AWS `AKIA…`, PEM-Private-Key-Blöcke)
+  plus Shannon-Entropie-Check für lange base64-artige Tokens (≥ 20 Zeichen,
+  ≥ 4.5 Bits/Zeichen). Fund → Task wird NICHT geschrieben (Exit 2), Meldung
+  nur mit redacted Auszug. Bewusste Ausnahme per `--allow-secrets`.
+  Hex-only-Tokens sind ausgenommen (Commit-Hashes/SHA256-Beweise sind
+  Task-Alltag); die Format-Detektoren decken die real hex-förmigen
+  Credential-Shapes ab. NB: Dieses Feature ist bewusst NICHT als Bridge-Job
+  baubar — der `dangerous_action`-Wächter des Goal-Loops matcht zwangsläufig
+  die Secret-Muster im generierten Diff (Gate-vs-Gate).
 
 ## Verifizierter Stand (Stufe 3 live, 2026-06-03)
 
