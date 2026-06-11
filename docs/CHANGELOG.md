@@ -40,6 +40,13 @@ Commit-Hashes verweisen auf `main`.
   echten Tunnel verifiziert (204 + voller claim->completed-Durchstich).
 
 ### Hinzugefuegt
+- **Lane-Health-Check (`scripts/bridge_health.py`, 2026-06-11):** neues strikt
+  read-only Modul `check_lane_health(now=None, max_age_s=..., max_errors=...)`
+  auf Basis der bestehenden `bridge_status.scan_lane()`-Logik. Zaehlt offene und
+  geclaimte Tasks sowie `_errors/` je Lane, meldet ueberalterte aelteste offene
+  Tasks oder zu viele `_errors/`, rendert text/json und beendet mit Exit 1 bei
+  Findings. Schwellwerte sind optional per Parameter, `config.json` oder Env
+  konfigurierbar; keine Telegram-Sendung in diesem Schritt.
 - **HTTP-Worker-Poll-Loop (`scripts/job_poll.py`, 2026-06-04):** der fehlende
   Daemon, der den DCO-Job-Pull tatsaechlich anschmeisst. Holt ueber
   `bridge_transport.get_source()` (`DUAL_BRIDGE_TRANSPORT=http`) einen Job aus dem
