@@ -214,6 +214,27 @@ Finding. Defaults sind config-fähig über `lane_health_max_age_s` /
 `DUAL_BRIDGE_LANE_HEALTH_MAX_ERRORS`; ein Config-Eintrag ist nicht Pflicht.
 Der Check sendet keine Telegram-Nachrichten und schreibt/claimt/verschiebt nie.
 
+## Bridge-Metriken
+
+`scripts/bridge_metrics.py` ist eine strikt read-only Auswertung der
+`_processed/`-Archive je Lane. Es paart `task-*.md` und `result-*.md` ueber
+`task_id`, berechnet die Durchlaufzeit aus `task.created` bis `result.created`
+oder `claimed_at` und zaehlt die `verdict`-Werte der Result-Frontmatter.
+Kaputte oder halbe Dateien werden uebersprungen; ein einzelnes Archiv-Problem
+bricht den Report nicht ab.
+
+```bash
+cd scripts
+python bridge_metrics.py --format text
+python bridge_metrics.py --format json --lane A-to-B
+```
+
+Die API `compute_metrics(lane=None)` liefert `count`, `verdict_counts`,
+`durchlaufzeit_min`, `durchlaufzeit_median`, `durchlaufzeit_max` und eine
+Lane-Aufschluesselung. `write_report(path)` schreibt einen einzelnen JSONL-
+oder Text-Report nur unter `scripts/state/` bzw. dem testbaren
+`DUAL_BRIDGE_STATE`-Override, niemals in den Drive-/Lane-Baum.
+
 ## Task-Protokoll
 
 ```yaml

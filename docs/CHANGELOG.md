@@ -40,6 +40,14 @@ Commit-Hashes verweisen auf `main`.
   echten Tunnel verifiziert (204 + voller claim->completed-Durchstich).
 
 ### Hinzugefuegt
+- **Bridge-Metriken (`scripts/bridge_metrics.py`, 2026-06-11):** neues strikt
+  read-only Modul `compute_metrics(lane=None)` ueber die `_processed/`-Archive.
+  Paart `task-*.md` und `result-*.md` je Lane, zaehlt Result-`verdict`-Werte und
+  berechnet Durchlaufzeiten aus `task.created` bis `result.created` bzw.
+  `claimed_at` (min/median/max). Kaputte/halbe Dateien werden fail-soft
+  uebersprungen. CLI: `python bridge_metrics.py [--format text|json]
+  [--lane <lane>]`; `write_report(path)` schreibt nur unter lokalem `state/`
+  bzw. `DUAL_BRIDGE_STATE`.
 - **Lane-Health-Check (`scripts/bridge_health.py`, 2026-06-11):** neues strikt
   read-only Modul `check_lane_health(now=None, max_age_s=..., max_errors=...)`
   auf Basis der bestehenden `bridge_status.scan_lane()`-Logik. Zaehlt offene und
