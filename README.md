@@ -225,6 +225,11 @@ claimed_at:
 
 - **`task_id`-Validierung** (Regex auf die exakte `make_task_id()`-Form) blockt
   Path-Traversal und Branch-Injection; invalide Tasks landen in `_errors/`.
+- **Secrets-Gate vor dem Senden:** `handoff_write.py` scannt den vollständigen
+  Task-Text vor dem Outbox-Write mit `scripts/secret_gate.py`. Erkannte
+  Telegram-/GitHub-/sk-/AWS-/PEM-Formate oder tokenartige High-Entropy-Werte
+  blockieren den Task, melden nur eine redacted Fundstelle und beenden mit
+  Exit-Code 2. `--allow-secrets` umgeht das Gate bewusst für Ausnahmefälle.
 - **Repo-Allowlist** für den codex-Runner (`DUAL_BRIDGE_REPO_ALLOWLIST`,
   fnmatch-Patterns; leer = alle erlaubt).
 - **P0-Crash-Requeue:** ein geclaimter Task ohne Result geht beim Poller-Crash

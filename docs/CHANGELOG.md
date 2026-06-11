@@ -8,6 +8,13 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Hinzugefuegt
+- **Secrets-Pre-Send-Gate (`scripts/secret_gate.py`, 2026-06-11):**
+  `handoff_write.py` scannt ausgehende Task-Dokumente vor dem Outbox-Write auf
+  gaengige Secret-Formate und tokenartige High-Entropy-Werte. Treffer blockieren
+  den Task mit Exit-Code 2 und redacted Fundstelle; `--allow-secrets` bleibt als
+  bewusster Override. Abgedeckt durch `scripts/test_secret_gate.py`.
+
 ### Behoben
 - **Mojibake im Result-/Verdikt-Text behoben (`scripts/job_poll.py` +
   `scripts/bridge_overnight.py`, 2026-06-06):** `_real_run_fn` rief
