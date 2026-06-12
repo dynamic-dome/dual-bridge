@@ -202,13 +202,16 @@ def test_handoff_write_scans_body_not_frontmatter() -> None:
 
 # --- handoff_poll: Empfaenger-Gate (Sicherheitsgrenze) --------------------------
 
-def _put_task(bc, lane: str, kind: str, adapter: str, body: str) -> str:
-    task_id = bc.make_task_id()
-    fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+def _put_task(bridge, lane: str, kind: str, adapter: str, body: str) -> str:
+    """Offenen Task in die Lane-Outbox legen. `bridge` ist das frisch
+    reloadete bridge_common-Modul des Aufrufers (Name absichtlich nicht `bc`,
+    damit die Signatur nicht den Modul-Alias der Tests shadowt)."""
+    task_id = bridge.make_task_id()
+    fm = {"created": bridge.now_iso(), "from": "codex@laptop-b",
           "to": "claude@laptop-a", "status": "open", "task_id": task_id,
           "kind": kind, "adapter": adapter, "claimed_by": "", "claimed_at": ""}
-    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
-                       bc.build_document(fm, body))
+    bridge.write_text_utf8(bridge.lane_outbox(lane) / f"task-{task_id}.md",
+                           bridge.build_document(fm, body))
     return task_id
 
 
@@ -218,6 +221,13 @@ def test_poll_rejects_policy_violation_with_error_result() -> None:
     import runners; importlib.reload(runners)
     import handoff_poll as hp; importlib.reload(hp)
     bc.ensure_dirs()
+    # Canary-Runner: beweist, dass das Gate VOR dem Dispatch greift — ohne
+    # Gate liefe dieser Runner und der Result-Text waere ein anderer.
+    calls: list[str] = []
+    def _canary(auftrag: str, fm: dict, workroot=None):
+        calls.append(fm.get("task_id", "?"))
+        return runners.RunnerResult(status="done", antwort="canary lief!")
+    runners.RUNNERS["codex"] = _canary
     # Level-Mismatch: review+codex — Runner darf NIE laufen
     tid = _put_task(bc, "B-to-A", "review", "codex", "## Auftrag\nbau was\n")
     task = bc.lane_outbox("B-to-A") / f"task-{tid}.md"
@@ -226,6 +236,7 @@ def test_poll_rejects_policy_violation_with_error_result() -> None:
         bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{tid}.md"))
     assert rfm["status"] == "error"
     assert "risk_policy:level-mismatch" in rbody
+    assert calls == [], "Runner lief trotz Policy-Verstoss"
     # Task archiviert (nichts haengt)
     assert list(bc.lane_processed("B-to-A").glob(f"task-{tid}*"))
 
