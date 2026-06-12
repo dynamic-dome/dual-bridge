@@ -56,8 +56,8 @@ KIND_LEVEL = {
     "implement": "build", "test": "build",
 }
 ADAPTER_CAPABILITY = {
-    "echo": "read", "claude": "read",
-    "codex": "build", "increment": "build",
+    "echo": "read", "claude": "read", "increment": "read",
+    "codex": "build",
 }
 OPS_PATTERNS = [
     r"\bschtasks\b",
@@ -70,6 +70,8 @@ OPS_PATTERNS = [
 
 def check_task(kind: str, adapter: str, body: str) -> Violation | None: ...
 ```
+
+(Korrektur 2026-06-12 bei Implementierung: increment ist ein reiner Text-Adapter — read, nicht build.)
 
 Drei Regeln (erste Verletzung gewinnt, Rückgabe trägt Regel-Key + Begründung):
 

@@ -50,7 +50,7 @@ def test_loop_id_and_round_are_mirrored(monkeypatch):
     importlib.reload(handoff_poll)
     lane = "A-to-B"
     task_id = _write_task(lane, {"loop_id": "loop-xyz", "round": "2",
-                                 "payload": "5", "kind": "implement"}, "5")
+                                 "payload": "5"}, "5")
     handoff_poll.poll_once()
     result = bc.lane_inbox(lane) / f"result-{task_id}.md"
     assert result.exists()
@@ -68,7 +68,7 @@ def test_loop_payload_is_runner_output(monkeypatch):
     importlib.reload(handoff_poll)
     lane = "A-to-B"
     task_id = _write_task(lane, {"loop_id": "loop-pay", "round": "0",
-                                 "payload": "5", "kind": "implement"}, "5")
+                                 "payload": "5"}, "5")
     handoff_poll.poll_once()
     result = bc.lane_inbox(lane) / f"result-{task_id}.md"
     assert result.exists()
@@ -102,7 +102,7 @@ def test_loop_task_with_runner_error_has_no_payload(monkeypatch):
     lane = "A-to-B"
     # increment runner errors on a non-numeric payload
     task_id = _write_task(lane, {"loop_id": "loop-err", "round": "0",
-                                 "payload": "abc", "kind": "implement"}, "abc")
+                                 "payload": "abc"}, "abc")
     handoff_poll.poll_once()
     result = bc.lane_inbox(lane) / f"result-{task_id}.md"
     assert result.exists()

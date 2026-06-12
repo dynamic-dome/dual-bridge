@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 
 import bridge_common as bc
-import risk_policy
 import runners  # noqa: F401 -- registers echo + increment
 import codex_adapter  # noqa: F401
 import claude_adapter  # noqa: F401
@@ -298,7 +297,7 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
         "created": bc.now_iso(), "schema_version": "2",
         "agent": me, "from": me, "to": to, "purpose": "handoff",
         "status": "open", "task_id": task_id,
-        "kind": "implement" if (repo or risk_policy.ADAPTER_CAPABILITY.get(adapter) == "build") else "echo",
+        "kind": "implement" if repo else "echo",
         "adapter": adapter,
         "loop_id": loop_id, "round": str(round_no), "payload": payload,
         "repo": repo, "base_branch": base_branch,

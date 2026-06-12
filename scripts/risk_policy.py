@@ -26,8 +26,8 @@ KIND_LEVEL = {
     "implement": "build", "test": "build",
 }
 ADAPTER_CAPABILITY = {
-    "echo": "read", "claude": "read",
-    "codex": "build", "increment": "build",
+    "echo": "read", "claude": "read", "increment": "read",
+    "codex": "build",
 }
 
 # Ops-Verben: Scheduled-Task-Verwaltung, Push/Merge in die Base, Admin.

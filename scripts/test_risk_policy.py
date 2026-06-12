@@ -18,7 +18,7 @@ def test_allowed_combos_pass() -> None:
     for kind, adapter in [("echo", "echo"), ("implement", "codex"),
                           ("test", "codex"), ("review", "claude"),
                           ("research", "claude"), ("research", "echo"),
-                          ("implement", "increment")]:
+                          ("echo", "increment")]:
         v = rp.check_task(kind, adapter, "## Ziel\nbau das Feature\n")
         assert v is None, f"{kind}/{adapter} muss erlaubt sein, got {v}"
 
@@ -34,6 +34,9 @@ def test_level_mismatch_rejected_both_directions() -> None:
     assert v is not None and v.rule == "level-mismatch", v
     # Begruendung nennt beide Seiten
     assert "implement" in v.reason and "claude" in v.reason
+    # increment ist text-only (read) — kann nicht bauen
+    v = rp.check_task("implement", "increment", "x")
+    assert v is not None and v.rule == "level-mismatch", v
 
 
 # --- R2: Ops-Verben im Auftragstext ------------------------------------------
