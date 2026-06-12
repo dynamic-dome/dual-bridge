@@ -54,6 +54,11 @@ def check_task(kind: str | None, adapter: str | None,
                body: str | None) -> Violation | None:
     """Prueft einen Task gegen die Policy. None = erlaubt.
 
+    `body` muss der reine AUFTRAGSTEXT sein (Markdown-Body ohne Frontmatter).
+    Caller duerfen NICHT das vollstaendige Dokument (Frontmatter + Body)
+    uebergeben — Repo-URLs und Branch-Namen im Frontmatter wuerden den R2-Scan
+    falsch triggern (FP ohne Override-Ausweg, Spec §Nicht-Ziele).
+
     Wirft nie — kaputte Eingaben (None/leer/unbekannt) sind R3-Ablehnungen
     (fail-closed), kein Crash im Poller/Writer.
     """

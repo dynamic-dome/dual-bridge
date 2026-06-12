@@ -179,3 +179,19 @@ def test_handoff_write_choices_match_policy_tables() -> None:
     # machen die Suite rot.
     assert hw.KIND_CHOICES == sorted(rp.KIND_LEVEL)
     assert hw.ADAPTER_CHOICES == sorted(rp.ADAPTER_CAPABILITY)
+
+
+def test_handoff_write_scans_body_not_frontmatter() -> None:
+    # Review-Fund c9d9eee: der Ops-Scan gilt NUR dem Auftragstext (Spec
+    # §Nicht-Ziele). Eine Repo-URL mit 'merge-main' im Slug darf den
+    # R2-Scan nicht triggern (FP ohne Override-Ausweg).
+    _fresh_bridge()
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_write as hw; importlib.reload(hw)
+    bc.ensure_dirs()
+    lane = bc.send_lane()
+    rc = hw.main(["bau ein kleines Feature", "--kind", "implement",
+                  "--adapter", "codex",
+                  "--repo", "https://github.com/dynamic-dome/auto-merge-main-flow"])
+    assert rc == 0, rc
+    assert len(list(bc.lane_outbox(lane).glob("task-*.md"))) == 1

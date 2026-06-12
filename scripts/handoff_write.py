@@ -8,6 +8,8 @@ Usage:
 The task is written into lane-<send_lane>/outbox/ of THIS endpoint
 (DUAL_BRIDGE_ENDPOINT). `--adapter` selects which runner the receiver uses
 (echo/codex/claude); `--to` overrides the target endpoint (default: the peer).
+
+Exit: 0 = geschrieben, 2 = Secret-Gate, 3 = Risk-Policy.
 """
 from __future__ import annotations
 
@@ -101,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-    violation = risk_policy.check_task(args.kind, args.adapter, document)
+    violation = risk_policy.check_task(args.kind, args.adapter, body)
     if violation is not None:
         print(f"[risk-policy] {violation.rule}: {violation.reason}",
               file=sys.stderr)
