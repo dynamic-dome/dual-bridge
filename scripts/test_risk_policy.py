@@ -283,10 +283,14 @@ def test_job_poll_rejects_ops_seed_rc2_todo_stays_open() -> None:
 
 def test_job_poll_clean_seed_still_runs() -> None:
     import job_poll as jp; importlib.reload(jp)
+    calls = []
     def fake_run(**kw):
+        calls.append(kw)
         return {"exit": 0}
     rc = jp.process_item(
+        # ohne kind=/adapter=-Direktive: Defaults implement/codex -> build==build
         _FakeItem("repo=https://github.com/dynamic-dome/dual-bridge\n"
                   "baue ein kleines Feature"),
         run_fn=fake_run)
     assert rc == 0, rc
+    assert len(calls) == 1, "run_fn muss bei sauberem Seed genau einmal laufen"

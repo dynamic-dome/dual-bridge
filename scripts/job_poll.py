@@ -254,7 +254,9 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
     """Arbeite einen geclaimten WorkItem ab und liefere den rc.
 
     parst item.input_text -> (repo, seed, adapter). Fehlt repo -> rc 2 (Config-
-    Fehler), ohne run_fn aufzurufen. Sonst run_fn(...) -> {'exit': rc}; ein Crash/
+    Fehler), ohne run_fn aufzurufen. Risk-Policy-Verstoss (risk_policy.check_task,
+    z.B. Ops-Verb im Seed) -> ebenfalls rc 2 ohne run_fn, Grund in
+    out_payload['error'] mit Praefix 'risk_policy:'. Sonst run_fn(...) -> {'exit': rc}; ein Crash/
     Timeout aus run_fn wird zu rc 1 gekapselt (fail-soft, damit ein kaputter Job
     den Loop nie killt). Der DCO mappt rc selbst auf den finalen Status.
 
