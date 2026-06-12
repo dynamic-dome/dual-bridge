@@ -101,6 +101,11 @@ Singleton-Lock verhindert Doppelstart/Doppel-Claim. Erst nach erstem manuellem R
 - **Sharepoint trägt nur Daten, nie Code** (Manifest §7). Keine Secrets in Tasks.
   Verarbeitetes wird verschoben (`_processed/`/`_errors/`), nie gelöscht.
 - Scheduled Tasks **nie blind aktivieren** — immer erst `--dry-run`.
+- **Risk-Policy (seit 06-12):** `scripts/risk_policy.py` erzwingt kind/adapter →
+  read/build/ops fail-closed an handoff_write/handoff_poll/job_poll, KEIN Override.
+  Neue kinds/adapters brauchen ZUERST einen Tabellen-Eintrag (Drift-Test macht die
+  Suite sonst rot). Ablehnungen heißen `risk_policy:<regel>`; Ops-Arbeit (Scheduled
+  Tasks, Merge/Push in die Base, Admin) läuft nie über die Bridge, nur interaktiv.
 - Windows-Subprocess-Härtung beachten (globale Regel §10): headless `claude -p`
   via stdin, `codex exec` Sandbox-Fallen. Live-Funde in `PICKUP-*.md`.
 - Plan: `docs/plans/2026-06-02-tier1-quickwins-plan.md` (lokal, aktuell). Ein
