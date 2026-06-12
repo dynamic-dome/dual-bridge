@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import bridge_common as bc
+import risk_policy
 
 
 # --- Eingabe-Parser ----------------------------------------------------------
@@ -268,6 +269,12 @@ def process_item(item, run_fn=None, *, max_rounds: int = 4,
     if parsed.repo is None:
         if out_payload is not None:
             out_payload["error"] = "config: seed ohne repo= (rc 2)"
+        return 2
+    violation = risk_policy.check_task(parsed.kind, parsed.adapter, parsed.seed)
+    if violation is not None:
+        if out_payload is not None:
+            out_payload["error"] = (
+                f"risk_policy:{violation.rule}: {violation.reason} (rc 2)")
         return 2
     try:
         seed = ensure_seed_structure(parsed.seed)

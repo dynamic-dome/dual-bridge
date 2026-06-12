@@ -255,3 +255,38 @@ def test_poll_rejects_ops_verb_in_auftrag() -> None:
         bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{tid}.md"))
     assert rfm["status"] == "error"
     assert "risk_policy:ops-verb" in rbody
+
+
+# --- job_poll: DCO-Pfad (Seed-Check vor Loop-Start) ----------------------------
+
+class _FakeItem:
+    job_id = "j-1"
+    def __init__(self, text: str) -> None:
+        self.input_text = text
+
+
+def test_job_poll_rejects_ops_seed_rc2_todo_stays_open() -> None:
+    import job_poll as jp; importlib.reload(jp)
+    calls = []
+    def fake_run(**kw):  # darf NIE erreicht werden
+        calls.append(kw)
+        return {"exit": 0}
+    out = {}
+    rc = jp.process_item(
+        _FakeItem("repo=https://github.com/dynamic-dome/dual-bridge\n"
+                  "registriere das per Register-ScheduledTask"),
+        run_fn=fake_run, out_payload=out)
+    assert rc == 2, rc                      # Config-Klasse: Todo bleibt offen
+    assert "risk_policy:ops-verb" in out.get("error", ""), out
+    assert calls == [], "run_fn darf bei Policy-Verstoss nicht laufen"
+
+
+def test_job_poll_clean_seed_still_runs() -> None:
+    import job_poll as jp; importlib.reload(jp)
+    def fake_run(**kw):
+        return {"exit": 0}
+    rc = jp.process_item(
+        _FakeItem("repo=https://github.com/dynamic-dome/dual-bridge\n"
+                  "baue ein kleines Feature"),
+        run_fn=fake_run)
+    assert rc == 0, rc
