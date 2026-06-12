@@ -63,7 +63,8 @@ OPS_PATTERNS = [
     r"\bschtasks\b",
     r"\b(Un)?[Rr]egister-ScheduledTask\b",
     r"\bgit\s+push\s+\S*\s+(main|master)\b",
-    r"\bmerge\b.{0,40}\b(main|master)\b",
+    r"\bmerge\b.{0,40}\b(into|to|nach)\s+(origin/)?(main|master)\b",
+    r"\bin\s+(origin/)?(main|master)\s+mergen\b",
     r"\bADMIN_PIN\b",
     r"^/admin\b",
 ]
@@ -71,7 +72,7 @@ OPS_PATTERNS = [
 def check_task(kind: str, adapter: str, body: str) -> Violation | None: ...
 ```
 
-(Korrektur 2026-06-12 bei Implementierung: increment ist ein reiner Text-Adapter — read, nicht build.)
+(Korrektur 2026-06-12 bei Implementierung: increment ist ein reiner Text-Adapter — read, nicht build. Merge-Pattern braucht eine Richtungs-Präposition — das lose `merge…main`-Muster traf harmlose Build-Prosa wie „merge conflict resolution in the main module", Final-Review I1.)
 
 Drei Regeln (erste Verletzung gewinnt, Rückgabe trägt Regel-Key + Begründung):
 

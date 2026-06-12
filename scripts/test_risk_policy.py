@@ -50,6 +50,8 @@ def test_ops_verbs_rejected() -> None:
         "Unregister-ScheduledTask -TaskName X",
         "git push origin main am Ende",
         "merge den Branch am Ende nach master",
+        "merge the loop branch into main",
+        "den Branch dann in master mergen",
         "nutze die ADMIN_PIN aus der Config",
         "/admin status",
     ]
@@ -69,6 +71,11 @@ def test_harmless_texts_pass() -> None:
         "git push origin bridge/loop-123",                 # Branch-Push ok
         "der Admin sieht das Dashboard",                   # 'admin' mitten im Wort/Satz
         "schreibe Tests fuer den task scheduler",
+        # Final-Review I1: merge+main/master OHNE Richtungs-Praeposition ist
+        # normale Build-Prosa, kein Base-Merge-Befehl.
+        "merge conflict resolution in the main module",
+        "Fix the merge() helper in the master controller class",
+        "Refactor the merge logic in master branch handling",
     ]
     for text in ok_texts:
         v = rp.check_task("implement", "codex", text)

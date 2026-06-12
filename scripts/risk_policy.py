@@ -37,7 +37,12 @@ OPS_PATTERNS = [
     r"\bschtasks\b",
     r"\b(un)?register-scheduledtask\b",
     r"\bgit\s+push\s+\S+\s+(main|master)\b",
-    r"\bmerge\b.{0,40}\b(main|master)\b",
+    # Merge in die Base nur bei RICHTUNGS-Praeposition (into/to/nach bzw.
+    # deutsches verb-finales "in main mergen") — ein looses
+    # `merge\b.{0,40}\b(main|master)` traf harmlose Build-Seeds wie
+    # "merge conflict resolution in the main module" (Final-Review I1).
+    r"\bmerge\b.{0,40}\b(into|to|nach)\s+(origin/)?(main|master)\b",
+    r"\bin\s+(origin/)?(main|master)\s+mergen\b",
     r"\badmin_pin\b",
     r"^/admin\b",
 ]
