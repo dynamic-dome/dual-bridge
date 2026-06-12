@@ -104,7 +104,11 @@ Singleton-Lock verhindert Doppelstart/Doppel-Claim. Erst nach erstem manuellem R
 - **Risk-Policy (seit 06-12):** `scripts/risk_policy.py` erzwingt kind/adapter →
   read/build/ops fail-closed an handoff_write/handoff_poll/job_poll, KEIN Override.
   Neue kinds/adapters brauchen ZUERST einen Tabellen-Eintrag (Drift-Test macht die
-  Suite sonst rot). Ablehnungen heißen `risk_policy:<regel>`; Ops-Arbeit (Scheduled
+  Suite sonst rot) UND danach ein Preset in der DCO-Miniapp
+  (`dynamic_central_orchestrator/miniapp/js/start.js` → `BRIDGE_PRESETS` +
+  `start.compose.test.js` + `tests/test_miniapp_bridge_compose.py` nachziehen —
+  die Compose-Maske bietet nur Presets an, kein freies kind/adapter).
+  Ablehnungen heißen `risk_policy:<regel>`; Ops-Arbeit (Scheduled
   Tasks, Merge/Push in die Base, Admin) läuft nie über die Bridge, nur interaktiv.
 - Windows-Subprocess-Härtung beachten (globale Regel §10): headless `claude -p`
   via stdin, `codex exec` Sandbox-Fallen. Live-Funde in `PICKUP-*.md`.
