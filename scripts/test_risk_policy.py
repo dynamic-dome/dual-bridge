@@ -110,3 +110,36 @@ def test_tables_cover_levels() -> None:
     assert "ops" not in rp.ADAPTER_CAPABILITY.values()
     assert set(rp.KIND_LEVEL.values()) <= set(rp.LEVELS)
     assert set(rp.ADAPTER_CAPABILITY.values()) <= set(rp.LEVELS)
+
+
+# --- loop_driver-Etikett: bauende Runden-Tasks tragen kind=implement ----------
+
+def _fresh_bridge(endpoint: str = "claude@laptop-a") -> Path:
+    root = Path(tempfile.mkdtemp(prefix="bridge-rp-"))
+    os.environ["DUAL_BRIDGE_ROOT"] = str(root)
+    os.environ["DUAL_BRIDGE_ENDPOINT"] = endpoint
+    return root
+
+
+def test_write_round_task_kind_follows_repo() -> None:
+    _fresh_bridge()
+    import bridge_common as bc; importlib.reload(bc)
+    import loop_driver as ld; importlib.reload(ld)
+    bc.ensure_dirs()
+    lane = bc.send_lane()
+    # bauender Runden-Task (repo gesetzt) -> implement
+    tid = ld.write_round_task("loop-x", 1, "bau weiter", adapter="codex",
+                              repo="https://github.com/dynamic-dome/dual-bridge",
+                              base_branch="main", loop_branch="bridge/loop-x")
+    fm, _ = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_outbox(lane) / f"task-{tid}.md"))
+    assert fm["kind"] == "implement", fm["kind"]
+    # Text-Runde (kein repo) -> echo wie bisher
+    tid2 = ld.write_round_task("loop-y", 1, "zaehle hoch", adapter="echo")
+    fm2, _ = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_outbox(lane) / f"task-{tid2}.md"))
+    assert fm2["kind"] == "echo", fm2["kind"]
+    # beide Kombos sind policy-konform (Ping-Pong darf nicht brechen)
+    import risk_policy as rp; importlib.reload(rp)
+    assert rp.check_task(fm["kind"], "codex", "x") is None
+    assert rp.check_task(fm2["kind"], "echo", "x") is None
