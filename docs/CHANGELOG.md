@@ -8,6 +8,14 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Geändert
+- **git-Gerüst in eigenes Modul extrahiert (`scripts/adapter_git.py`)** — Klon/
+  Credential/Branch/Diff/Commit/Push-Helfer + `merge_accepted_to_base`/
+  `push_branch_on_escalation` verbatim aus `codex_adapter.py` (Triage 1.6,
+  Vorstufe claude-Builder). `codex_adapter` re-exportiert als Shim und ruft nur
+  noch über den `adapter_git.`-Namespace auf (ein Monkeypatch-Punkt, Pin-Tests
+  in `test_adapter_git_shim.py`). Suite 403 → 406.
+
 ### Behoben
 - **Mojibake im Result-/Verdikt-Text behoben (`scripts/job_poll.py` +
   `scripts/bridge_overnight.py`, 2026-06-06):** `_real_run_fn` rief
