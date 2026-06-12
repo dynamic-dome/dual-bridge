@@ -115,6 +115,10 @@ def test_tables_cover_levels() -> None:
 # --- loop_driver-Etikett: bauende Runden-Tasks tragen kind=implement ----------
 
 def _fresh_bridge(endpoint: str = "claude@laptop-a") -> Path:
+    """Isolierte Bridge-Env (tmp root + endpoint) setzen. Der CALLER muss
+    danach bridge_common (und davon abhaengige Module) per importlib.reload
+    frisch laden und bc.ensure_dirs() rufen — sonst zeigt der Modul-State noch
+    auf das Root des vorherigen Tests. Env-Restore macht die autouse-Fixture."""
     root = Path(tempfile.mkdtemp(prefix="bridge-rp-"))
     os.environ["DUAL_BRIDGE_ROOT"] = str(root)
     os.environ["DUAL_BRIDGE_ENDPOINT"] = endpoint
