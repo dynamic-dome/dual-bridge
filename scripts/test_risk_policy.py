@@ -1,0 +1,112 @@
+"""Risk-Level-Mapping tests (spec 2026-06-12-risk-level-mapping-design.md).
+Pure stdlib + assert: python -X utf8 -m pytest test_risk_policy.py -q
+"""
+from __future__ import annotations
+
+import importlib
+import os
+import tempfile
+from pathlib import Path
+
+
+# --- R1: Level-Mismatch (kind-Level != adapter-Capability) -------------------
+
+def test_allowed_combos_pass() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    # alle produktiven Kombinationen (Spec §Betriebsauswirkung)
+    for kind, adapter in [("echo", "echo"), ("implement", "codex"),
+                          ("test", "codex"), ("review", "claude"),
+                          ("research", "claude"), ("research", "echo"),
+                          ("implement", "increment")]:
+        v = rp.check_task(kind, adapter, "## Ziel\nbau das Feature\n")
+        assert v is None, f"{kind}/{adapter} muss erlaubt sein, got {v}"
+
+
+def test_level_mismatch_rejected_both_directions() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    # bauender Adapter auf read-Task (Eskalation)
+    v = rp.check_task("review", "codex", "review the diff")
+    assert v is not None and v.rule == "level-mismatch", v
+    # read-Adapter auf build-Task (heutiges Spaet-Leise-Scheitern)
+    v = rp.check_task("implement", "claude", "baue X")
+    assert v is not None and v.rule == "level-mismatch", v
+    # Begruendung nennt beide Seiten
+    assert "implement" in v.reason and "claude" in v.reason
+
+
+# --- R2: Ops-Verben im Auftragstext ------------------------------------------
+
+def test_ops_verbs_rejected() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    ops_texts = [
+        "registriere via schtasks /create einen Task",
+        "fuehre Register-ScheduledTask aus",
+        "Unregister-ScheduledTask -TaskName X",
+        "git push origin main am Ende",
+        "merge den Branch am Ende nach master",
+        "nutze die ADMIN_PIN aus der Config",
+        "/admin status",
+    ]
+    for text in ops_texts:
+        v = rp.check_task("implement", "codex", text)
+        assert v is not None and v.rule == "ops-verb", f"{text!r}: {v}"
+        # Begruendung nennt das Pattern, aber niemals mehr als den Treffer
+        assert v.reason, text
+
+
+def test_harmless_texts_pass() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    ok_texts = [
+        "review the scheduler docs",                       # kein Ops-Verb
+        "pushe auf den bridge/task-Branch",                # kein Base-Push
+        "git push origin bridge/loop-123",                 # Branch-Push ok
+        "der Admin sieht das Dashboard",                   # 'admin' mitten im Wort/Satz
+        "schreibe Tests fuer den task scheduler",
+    ]
+    for text in ok_texts:
+        v = rp.check_task("implement", "codex", text)
+        assert v is None, f"{text!r} darf nicht matchen: {v}"
+
+
+def test_ops_scan_also_on_read_tasks() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    # R2 gilt unabhaengig vom Level — auch ein read-Task darf keine Ops anweisen
+    v = rp.check_task("review", "claude", "und danach git push origin master")
+    assert v is not None and v.rule == "ops-verb", v
+
+
+# --- R3: fail-closed bei Drift/kaputten Eingaben ------------------------------
+
+def test_unknown_values_fail_closed() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    for kind, adapter in [("deploy", "codex"), ("implement", "gemini"),
+                          ("", "echo"), ("echo", ""), (None, "echo"),
+                          ("echo", None)]:
+        v = rp.check_task(kind, adapter, "x")
+        assert v is not None and v.rule == "unknown-field", f"{kind}/{adapter}: {v}"
+
+
+def test_none_body_is_safe() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    assert rp.check_task("echo", "echo", None) is None
+    assert rp.check_task("echo", "echo", "") is None
+
+
+# --- Tabellen-Invarianten ------------------------------------------------------
+
+def test_tables_cover_levels() -> None:
+    import risk_policy as rp
+    importlib.reload(rp)
+    assert rp.LEVELS == ("read", "build", "ops")
+    # kein kind erreicht ops — 'kein Admin-Exec ueber die Bridge' strukturell
+    assert "ops" not in rp.KIND_LEVEL.values()
+    assert "ops" not in rp.ADAPTER_CAPABILITY.values()
+    assert set(rp.KIND_LEVEL.values()) <= set(rp.LEVELS)
+    assert set(rp.ADAPTER_CAPABILITY.values()) <= set(rp.LEVELS)
