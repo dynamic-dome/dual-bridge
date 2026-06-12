@@ -406,6 +406,7 @@ def test_write_includes_repo_fields() -> None:
     importlib.reload(hw)
 
     rc = hw.main(["bau das feature", "--kind", "implement",
+                  "--adapter", "codex",  # codex=build matches implement=build (risk-policy)
                   "--repo", "https://example.test/repo.git",
                   "--base-branch", "main"])
     assert rc == 0

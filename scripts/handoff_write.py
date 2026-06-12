@@ -15,7 +15,12 @@ import argparse
 import sys
 
 import bridge_common as bc
+import risk_policy
 import secret_gate
+
+# Choices kommen aus der Policy-Tabelle — EINE Quelle, kein Drift (Spec §Tests 6).
+KIND_CHOICES = sorted(risk_policy.KIND_LEVEL)
+ADAPTER_CHOICES = sorted(risk_policy.ADAPTER_CAPABILITY)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -24,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--kind",
         default="echo",
-        choices=["echo", "implement", "research", "review", "test"],
+        choices=KIND_CHOICES,
         help="Task kind. Stage 0 uses 'echo'.",
     )
     parser.add_argument(
@@ -41,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Base branch to start from (default: main).",
     )
     parser.add_argument("--adapter", default="echo",
-                        choices=["echo", "codex", "claude", "increment"],
+                        choices=ADAPTER_CHOICES,
                         help="Which runner the receiver should use.")
     parser.add_argument("--to", default="",
                         help="Target endpoint (default: the peer of my endpoint).")
@@ -95,6 +100,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+
+    violation = risk_policy.check_task(args.kind, args.adapter, document)
+    if violation is not None:
+        print(f"[risk-policy] {violation.rule}: {violation.reason}",
+              file=sys.stderr)
+        print(f"[{me}] Task NICHT geschrieben — Risk-Policy-Verstoss "
+              "(kein Override; Ops-Arbeit laeuft interaktiv).",
+              file=sys.stderr)
+        return 3
 
     out_path = bc.lane_outbox(lane) / f"task-{task_id}.md"
     bc.write_text_utf8(out_path, document)

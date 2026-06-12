@@ -236,12 +236,13 @@ def test_writer_uses_send_lane_and_adapter() -> None:
     _fresh_bridge("codex@laptop-b")  # B sends on B-to-A
     import bridge_common as bc; importlib.reload(bc)
     import handoff_write as hw; importlib.reload(hw)
-    rc = hw.main(["bau das feature", "--kind", "implement", "--adapter", "claude"])
+    # codex is build-level — matches implement (was: claude=read, mismatch, now blocked by risk-policy)
+    rc = hw.main(["bau das feature", "--kind", "implement", "--adapter", "codex"])
     assert rc == 0
     tasks = list(bc.lane_outbox("B-to-A").glob("task-*.md"))
     assert len(tasks) == 1, f"task not in B-to-A send lane: {tasks}"
     fm, _ = bc.parse_frontmatter(bc.read_text_utf8(tasks[0]))
-    assert fm["adapter"] == "claude"
+    assert fm["adapter"] == "codex"
     assert fm["from"] == "codex@laptop-b" and fm["to"] == "claude@laptop-a"
     print("  write OK — task in send-lane outbox with adapter + from/to set")
 

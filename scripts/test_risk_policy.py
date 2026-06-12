@@ -147,3 +147,35 @@ def test_write_round_task_kind_follows_repo() -> None:
     import risk_policy as rp; importlib.reload(rp)
     assert rp.check_task(fm["kind"], "codex", "x") is None
     assert rp.check_task(fm2["kind"], "echo", "x") is None
+
+
+# --- handoff_write: Sender-Gate (kein Override) --------------------------------
+
+def test_handoff_write_rejects_mismatch_and_ops() -> None:
+    _fresh_bridge()
+    import bridge_common as bc; importlib.reload(bc)
+    import handoff_write as hw; importlib.reload(hw)
+    bc.ensure_dirs()
+    lane = bc.send_lane()
+    # Level-Mismatch: review+codex -> rc 3, nichts geschrieben
+    rc = hw.main(["review den diff", "--kind", "review", "--adapter", "codex"])
+    assert rc == 3, rc
+    assert not list(bc.lane_outbox(lane).glob("task-*.md"))
+    # Ops-Verb -> rc 3, nichts geschrieben
+    rc = hw.main(["git push origin main bitte", "--kind", "implement",
+                  "--adapter", "codex"])
+    assert rc == 3, rc
+    assert not list(bc.lane_outbox(lane).glob("task-*.md"))
+    # erlaubte Kombination schreibt weiterhin (rc 0)
+    rc = hw.main(["spiegel mich", "--kind", "echo", "--adapter", "echo"])
+    assert rc == 0, rc
+    assert len(list(bc.lane_outbox(lane).glob("task-*.md"))) == 1
+
+
+def test_handoff_write_choices_match_policy_tables() -> None:
+    import handoff_write as hw; importlib.reload(hw)
+    import risk_policy as rp; importlib.reload(rp)
+    # Drift-Test (Spec §Tests Nr. 6): neue kinds/adapters ohne Policy-Eintrag
+    # machen die Suite rot.
+    assert hw.KIND_CHOICES == sorted(rp.KIND_LEVEL)
+    assert hw.ADAPTER_CHOICES == sorted(rp.ADAPTER_CAPABILITY)
