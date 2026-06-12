@@ -195,3 +195,49 @@ def test_handoff_write_scans_body_not_frontmatter() -> None:
                   "--repo", "https://github.com/dynamic-dome/auto-merge-main-flow"])
     assert rc == 0, rc
     assert len(list(bc.lane_outbox(lane).glob("task-*.md"))) == 1
+
+
+# --- handoff_poll: Empfaenger-Gate (Sicherheitsgrenze) --------------------------
+
+def _put_task(bc, lane: str, kind: str, adapter: str, body: str) -> str:
+    task_id = bc.make_task_id()
+    fm = {"created": bc.now_iso(), "from": "codex@laptop-b",
+          "to": "claude@laptop-a", "status": "open", "task_id": task_id,
+          "kind": kind, "adapter": adapter, "claimed_by": "", "claimed_at": ""}
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+
+
+def test_poll_rejects_policy_violation_with_error_result() -> None:
+    _fresh_bridge("claude@laptop-a")  # A receives on B-to-A
+    import bridge_common as bc; importlib.reload(bc)
+    import runners; importlib.reload(runners)
+    import handoff_poll as hp; importlib.reload(hp)
+    bc.ensure_dirs()
+    # Level-Mismatch: review+codex — Runner darf NIE laufen
+    tid = _put_task(bc, "B-to-A", "review", "codex", "## Auftrag\nbau was\n")
+    task = bc.lane_outbox("B-to-A") / f"task-{tid}.md"
+    assert hp.process_one(task, lane="B-to-A") is True
+    rfm, rbody = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{tid}.md"))
+    assert rfm["status"] == "error"
+    assert "risk_policy:level-mismatch" in rbody
+    # Task archiviert (nichts haengt)
+    assert list(bc.lane_processed("B-to-A").glob(f"task-{tid}*"))
+
+
+def test_poll_rejects_ops_verb_in_auftrag() -> None:
+    _fresh_bridge("claude@laptop-a")
+    import bridge_common as bc; importlib.reload(bc)
+    import runners; importlib.reload(runners)
+    import handoff_poll as hp; importlib.reload(hp)
+    bc.ensure_dirs()
+    tid = _put_task(bc, "B-to-A", "echo", "echo",
+                    "## Auftrag\nschtasks /create /tn evil\n")
+    task = bc.lane_outbox("B-to-A") / f"task-{tid}.md"
+    assert hp.process_one(task, lane="B-to-A") is True
+    rfm, rbody = bc.parse_frontmatter(
+        bc.read_text_utf8(bc.lane_inbox("B-to-A") / f"result-{tid}.md"))
+    assert rfm["status"] == "error"
+    assert "risk_policy:ops-verb" in rbody

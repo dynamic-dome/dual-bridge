@@ -18,6 +18,7 @@ import threading
 import time
 
 import bridge_common as bc
+import risk_policy
 import runners  # noqa: F401 -- registers echo
 import codex_adapter  # noqa: F401 -- registers codex
 import claude_adapter  # noqa: F401 -- registers claude
@@ -202,16 +203,22 @@ def process_one(task_path: bc.Path, lane: str) -> bool:
 
     auftrag = _extract_section(body, "## Auftrag") or body.strip()
     adapter = fm.get("adapter", "echo")
-    runner = runners.RUNNERS.get(adapter)
-    if runner is None:
-        result = runners.RunnerResult(status="error",
-                                      error_text=f"unbekannter adapter: {adapter!r}")
+    violation = risk_policy.check_task(fm.get("kind", "echo"), adapter, auftrag)
+    if violation is not None:
+        result = runners.RunnerResult(
+            status="error",
+            error_text=f"risk_policy:{violation.rule}: {violation.reason}")
     else:
-        try:
-            result = runner(auftrag=auftrag, fm=fm, workroot=CODEX_WORKROOT)
-        except Exception as exc:  # noqa: BLE001 -- a runner must never crash the poller
+        runner = runners.RUNNERS.get(adapter)
+        if runner is None:
             result = runners.RunnerResult(status="error",
-                                          error_text=f"{adapter} runner crash: {type(exc).__name__}: {exc}")
+                                          error_text=f"unbekannter adapter: {adapter!r}")
+        else:
+            try:
+                result = runner(auftrag=auftrag, fm=fm, workroot=CODEX_WORKROOT)
+            except Exception as exc:  # noqa: BLE001 -- a runner must never crash the poller
+                result = runners.RunnerResult(status="error",
+                                              error_text=f"{adapter} runner crash: {type(exc).__name__}: {exc}")
 
     # Stage-2b: review kind gets accepted/rejected verdict semantics. Verdict
     # extraction lives in this review-specific path (NOT in the generic
