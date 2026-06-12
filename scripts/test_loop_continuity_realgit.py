@@ -6,6 +6,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import adapter_git as ag
 import codex_adapter as ca
 
 
@@ -175,7 +176,7 @@ def test_merge_accepted_to_base_integrates_into_main(monkeypatch, tmp_path):
     assert "paketA-line" not in (probe / "f.txt").read_text(encoding="utf-8")
 
     # Merge the accepted branch into main.
-    new_head = ca.merge_accepted_to_base(
+    new_head = ag.merge_accepted_to_base(
         repo=origin, branch="bridge/loop-A", base_branch="main",
         workdir=workroot / "loop-A")
     assert new_head, "merge returned no head"
@@ -216,7 +217,7 @@ def test_merge_accepted_to_base_conflict_raises(monkeypatch, tmp_path):
 
     import pytest
     with pytest.raises(RuntimeError):
-        ca.merge_accepted_to_base(repo=origin, branch="bridge/loop-A",
+        ag.merge_accepted_to_base(repo=origin, branch="bridge/loop-A",
                                   base_branch="main", workdir=workroot / "loop-A")
 
 
@@ -240,7 +241,7 @@ def test_merge_accepted_resolves_base_on_master_repo(monkeypatch, tmp_path):
 
     # Caller passes the unresolved 'main' (exactly what loop_driver does); the
     # merge must resolve it to master itself.
-    new_head = ca.merge_accepted_to_base(
+    new_head = ag.merge_accepted_to_base(
         repo=origin, branch="bridge/loop-A", base_branch="main",
         workdir=workroot / "loop-A")
     assert new_head, "merge returned no head on a master-only repo"

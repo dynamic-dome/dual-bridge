@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import subprocess
 
-import codex_adapter as ca
-from codex_adapter import _Cred
+import adapter_git as ag
+from adapter_git import _Cred
 
 
 def _proc(rc: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -33,11 +33,11 @@ def test_escalation_push_pushes_loop_branch(monkeypatch, tmp_path):
         calls.append(args)
         return _proc(0)
 
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
-    monkeypatch.setattr(ca, "_resolve_https_credential",
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_resolve_https_credential",
                         lambda repo: _Cred(env={}))
 
-    ok = ca.push_branch_on_escalation(
+    ok = ag.push_branch_on_escalation(
         repo="https://github.com/x/y", branch="bridge/loop-A-0-aa", workdir=tmp_path)
 
     assert ok is True
@@ -51,11 +51,11 @@ def test_escalation_push_is_best_effort_on_failure(monkeypatch, tmp_path):
     def fake_run_git(wd, *args, cred=None):
         return _proc(1, stderr="remote rejected")
 
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
-    monkeypatch.setattr(ca, "_resolve_https_credential",
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_resolve_https_credential",
                         lambda repo: _Cred(env={}))
 
-    ok = ca.push_branch_on_escalation(
+    ok = ag.push_branch_on_escalation(
         repo="https://github.com/x/y", branch="bridge/loop-A-0-aa", workdir=tmp_path)
 
     assert ok is False
@@ -66,9 +66,9 @@ def test_escalation_push_swallows_exceptions(monkeypatch, tmp_path):
     def boom(repo):
         raise RuntimeError("cred blew up")
 
-    monkeypatch.setattr(ca, "_resolve_https_credential", boom)
+    monkeypatch.setattr(ag, "_resolve_https_credential", boom)
 
-    ok = ca.push_branch_on_escalation(
+    ok = ag.push_branch_on_escalation(
         repo="https://github.com/x/y", branch="bridge/loop-A-0-aa", workdir=tmp_path)
 
     assert ok is False

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import subprocess
 
+import adapter_git as ag
 import codex_adapter as ca
-from codex_adapter import _Cred
+from adapter_git import _Cred
 
 
 def _proc(rc: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -29,8 +30,8 @@ def test_requested_branch_exists_is_kept(monkeypatch):
     def fake(wd, *args, cred=None):
         assert args[:2] == ("ls-remote", "--heads")  # only the heads probe runs
         return _proc(0, stdout="abc\trefs/heads/main")
-    monkeypatch.setattr(ca, "_run_git", fake)
-    assert ca._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
+    monkeypatch.setattr(ag, "_run_git", fake)
+    assert ag._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
 
 
 def test_absent_branch_falls_back_to_remote_default(monkeypatch):
@@ -43,8 +44,8 @@ def test_absent_branch_falls_back_to_remote_default(monkeypatch):
         if args[:2] == ("ls-remote", "--symref"):
             return _proc(0, stdout=_SYMREF)       # HEAD -> master
         raise AssertionError(f"unexpected git call: {args}")
-    monkeypatch.setattr(ca, "_run_git", fake)
-    assert ca._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "master"
+    monkeypatch.setattr(ag, "_run_git", fake)
+    assert ag._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "master"
     assert ("ls-remote", "--symref") in calls
 
 
@@ -53,8 +54,8 @@ def test_probe_failure_keeps_requested_branch(monkeypatch):
     the real error (do NOT silently switch branches on a failed probe)."""
     def fake(wd, *args, cred=None):
         return _proc(2, stderr="fatal: could not read Username")
-    monkeypatch.setattr(ca, "_run_git", fake)
-    assert ca._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
+    monkeypatch.setattr(ag, "_run_git", fake)
+    assert ag._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
 
 
 def test_default_unparseable_keeps_requested_branch(monkeypatch):
@@ -64,21 +65,21 @@ def test_default_unparseable_keeps_requested_branch(monkeypatch):
         if args[:2] == ("ls-remote", "--heads"):
             return _proc(0, stdout="")
         return _proc(0, stdout="garbage without a ref line")
-    monkeypatch.setattr(ca, "_run_git", fake)
-    assert ca._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
+    monkeypatch.setattr(ag, "_run_git", fake)
+    assert ag._resolve_base_branch("https://x/r", "main", _Cred(env={})) == "main"
 
 
 def test_remote_default_branch_parses_trunk(monkeypatch):
     """_remote_default_branch parses an arbitrary default name (trunk)."""
-    monkeypatch.setattr(ca, "_run_git",
+    monkeypatch.setattr(ag, "_run_git",
                         lambda *a, **k: _proc(0, stdout="ref: refs/heads/trunk\tHEAD\n"))
-    assert ca._remote_default_branch("https://x/r", _Cred(env={})) == "trunk"
+    assert ag._remote_default_branch("https://x/r", _Cred(env={})) == "trunk"
 
 
 def test_remote_default_branch_none_on_empty(monkeypatch):
     """No symref line (empty/private-anonymous) -> None."""
-    monkeypatch.setattr(ca, "_run_git", lambda *a, **k: _proc(0, stdout=""))
-    assert ca._remote_default_branch("https://x/r", _Cred(env={})) is None
+    monkeypatch.setattr(ag, "_run_git", lambda *a, **k: _proc(0, stdout=""))
+    assert ag._remote_default_branch("https://x/r", _Cred(env={})) is None
 
 
 def test_resolve_runs_on_existing_workdir_too(monkeypatch, tmp_path):
@@ -98,13 +99,13 @@ def test_resolve_runs_on_existing_workdir_too(monkeypatch, tmp_path):
     (existing / ".git").mkdir(parents=True)
 
     called = {"resolve": False}
-    monkeypatch.setattr(ca, "_resolve_base_branch",
+    monkeypatch.setattr(ag, "_resolve_base_branch",
                         lambda *a, **k: called.__setitem__("resolve", True) or "master")
-    monkeypatch.setattr(ca, "_resolve_https_credential", lambda _r: _Cred(env={}))
+    monkeypatch.setattr(ag, "_resolve_https_credential", lambda _r: _Cred(env={}))
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
-    monkeypatch.setattr(ca, "_git_clone_or_pull", lambda *a, **k: existing)
-    monkeypatch.setattr(ca, "_git_checkout_branch", lambda *a, **k: None)
-    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])
+    monkeypatch.setattr(ag, "_git_clone_or_pull", lambda *a, **k: existing)
+    monkeypatch.setattr(ag, "_git_checkout_branch", lambda *a, **k: None)
+    monkeypatch.setattr(ag, "_git_status_porcelain", lambda _w: [])
     monkeypatch.setattr(ca.subprocess, "run",
                         lambda *a, **k: _proc(0, stdout="answer"))
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")

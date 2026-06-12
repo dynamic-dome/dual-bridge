@@ -3,6 +3,7 @@ No real codex/git network — we monkeypatch the git helpers and the codex call.
 conftest.py isolates DUAL_BRIDGE_ROOT."""
 from __future__ import annotations
 
+import adapter_git as ag
 import codex_adapter as ca
 
 
@@ -22,15 +23,15 @@ def test_run_codex_task_uses_branch_override(monkeypatch, tmp_path):
         stdout = "done"
         stderr = ""
 
-    monkeypatch.setattr(ca, "_git_clone_or_pull", fake_clone)
-    monkeypatch.setattr(ca, "_git_checkout_branch", fake_checkout)
+    monkeypatch.setattr(ag, "_git_clone_or_pull", fake_clone)
+    monkeypatch.setattr(ag, "_git_checkout_branch", fake_checkout)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
     # subprocess.run mock keeps _resolve_base_branch's git probes stubbed; the
     # codex call now goes through the _run_codex_exec seam (Popen + tree-kill).
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
-    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])  # no changes → no commit
+    monkeypatch.setattr(ag, "_git_status_porcelain", lambda _w: [])  # no changes → no commit
 
     res = ca.run_codex_task(
         auftrag="x", repo="r", base_branch="main", task_id="t-1",
@@ -43,9 +44,9 @@ def test_run_codex_task_uses_branch_override(monkeypatch, tmp_path):
 def test_run_codex_task_defaults_to_task_branch(monkeypatch, tmp_path):
     """Without branch=, the legacy bridge/task-<id> name is used (Stage-1 unchanged)."""
     used = {}
-    monkeypatch.setattr(ca, "_git_clone_or_pull",
+    monkeypatch.setattr(ag, "_git_clone_or_pull",
                         lambda r, b, w, **kw: (w / ".git").mkdir(parents=True, exist_ok=True) or w)
-    monkeypatch.setattr(ca, "_git_checkout_branch",
+    monkeypatch.setattr(ag, "_git_checkout_branch",
                         lambda w, branch: used.__setitem__("b", branch))
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
@@ -56,7 +57,7 @@ def test_run_codex_task_defaults_to_task_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
-    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: [])
+    monkeypatch.setattr(ag, "_git_status_porcelain", lambda _w: [])
 
     ca.run_codex_task(auftrag="x", repo="r", base_branch="main",
                       task_id="t-99", workroot=tmp_path)
@@ -80,8 +81,8 @@ def test_clone_or_pull_prefers_existing_remote_branch(monkeypatch, tmp_path):
             _CP.stdout = "abc123\trefs/heads/bridge/loop-abc\n"
         return _CP()
 
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
-    ca._git_clone_or_pull("repo", "main", workdir, prefer_branch="bridge/loop-abc")
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
+    ag._git_clone_or_pull("repo", "main", workdir, prefer_branch="bridge/loop-abc")
 
     # It must have reset to origin/bridge/loop-abc, not origin/main.
     assert ("reset", "--hard", "origin/bridge/loop-abc") in calls
@@ -102,8 +103,8 @@ def test_clone_or_pull_falls_back_to_base_when_branch_absent(monkeypatch, tmp_pa
             stderr = ""
         return _CP()
 
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
-    ca._git_clone_or_pull("repo", "main", workdir, prefer_branch="bridge/loop-new")
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
+    ag._git_clone_or_pull("repo", "main", workdir, prefer_branch="bridge/loop-new")
     assert ("reset", "--hard", "origin/main") in calls
 
 
@@ -140,9 +141,9 @@ def test_codex_runner_branch_absent_is_none(monkeypatch, tmp_path):
 
 def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
     """run_codex_task returns the build diff (git diff base..HEAD) on success."""
-    monkeypatch.setattr(ca, "_git_clone_or_pull",
+    monkeypatch.setattr(ag, "_git_clone_or_pull",
                         lambda r, b, w, **k: (w / ".git").mkdir(parents=True, exist_ok=True) or w)
-    monkeypatch.setattr(ca, "_git_checkout_branch", lambda w, branch: None)
+    monkeypatch.setattr(ag, "_git_checkout_branch", lambda w, branch: None)
     monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
 
     class _Proc:
@@ -152,9 +153,9 @@ def test_run_codex_task_captures_diff(monkeypatch, tmp_path):
     monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
     monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
-    monkeypatch.setattr(ca, "_git_status_porcelain", lambda _w: ["scripts/runners.py"])
-    monkeypatch.setattr(ca, "_git_commit_and_push", lambda w, b, m: "abc123")
-    monkeypatch.setattr(ca, "_git_diff", lambda w, base: "--- a\n+++ b\n+new line\n")
+    monkeypatch.setattr(ag, "_git_status_porcelain", lambda _w: ["scripts/runners.py"])
+    monkeypatch.setattr(ag, "_git_commit_and_push", lambda w, b, m: "abc123")
+    monkeypatch.setattr(ag, "_git_diff", lambda w, base: "--- a\n+++ b\n+new line\n")
 
     res = ca.run_codex_task(auftrag="x", repo="r", base_branch="main",
                             task_id="t-d", workroot=tmp_path, branch="bridge/loop-d")
@@ -178,7 +179,7 @@ def _fake_fill(stdout, returncode=0):
 def test_resolve_https_credential_token_in_file_not_argv_or_env(monkeypatch):
     """HTTPS-Remote -> GIT_ASKPASS + store-Datei. Das Token liegt in der DATEI,
     NICHT in env-Values (kein Env-Leak) und NICHT auf einer git-Kommandozeile."""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=github.com\nusername=bob\npassword=ghp_secrettoken\n"))
     cred = ca._resolve_https_credential("https://github.com/owner/private-repo")
     try:
@@ -242,7 +243,7 @@ def test_askpass_helper_missing_file_is_empty(tmp_path):
 def test_resolve_https_credential_cleans_store_if_wrapper_fails(monkeypatch):
     """Wirft _write_askpass_wrapper, darf die token-tragende store-Datei NICHT
     leaken -> leeres _Cred, Datei geloescht."""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=github.com\nusername=bob\npassword=tok\n"))
     captured = {}
 
@@ -250,7 +251,7 @@ def test_resolve_https_credential_cleans_store_if_wrapper_fails(monkeypatch):
         # Pfad der store-Datei wird VOR dem Wurf vom Resolver erzeugt; wir koennen
         # ihn ueber den TEMP-Glob nach dem Aufruf pruefen.
         raise OSError("disk full")
-    monkeypatch.setattr(ca, "_write_askpass_wrapper", boom)
+    monkeypatch.setattr(ag, "_write_askpass_wrapper", boom)
 
     import glob
     import tempfile
@@ -265,7 +266,7 @@ def test_resolve_https_credential_urlencodes_special_chars(monkeypatch):
     """SECURITY-Regression: Sonderzeichen in user/pw (', :, @, $, Leerzeichen)
     werden URL-encoded -> KEINE Shell-Injection, KEINE zweite store-Zeile, kein
     Zerbrechen des Eintrags. (Der fruehere inline-`!sh`-Helper war hier verwundbar.)"""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=h.example\nusername=a'b\npassword=p:w@d$(x) y\n"))
     cred = ca._resolve_https_credential("https://h.example/o/r")
     try:
@@ -320,14 +321,14 @@ def test_resolve_https_credential_skips_local_and_ssh():
 
 def test_resolve_https_credential_empty_when_fill_fails(monkeypatch):
     """`git credential fill` rc!=0 -> leeres _Cred (git nutzt seine eigene Kette)."""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill("", returncode=1))
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill("", returncode=1))
     cred = ca._resolve_https_credential("https://github.com/o/r")
     assert cred.env == {} and cred.store_path is None
 
 
 def test_resolve_https_credential_empty_when_no_host(monkeypatch):
     """Ohne host (oder user/pw) -> leeres _Cred, keine halbe store-Zeile."""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "username=bob\npassword=tok\n"))   # kein host
     cred = ca._resolve_https_credential("https://github.com/o/r")
     assert cred.env == {} and cred.store_path is None
@@ -336,7 +337,7 @@ def test_resolve_https_credential_empty_when_no_host(monkeypatch):
 def test_clone_or_pull_deletes_store_and_wrapper(monkeypatch, tmp_path):
     """Store-Datei UND askpass-Wrapper werden nach den git-Calls geloescht --
     auch wenn der Clone fehlschlaegt (finally)."""
-    monkeypatch.setattr(ca.subprocess, "run", _fake_fill(
+    monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=github.com\nusername=bob\npassword=tok\n"))
     seen = {}
 
@@ -352,11 +353,11 @@ def test_clone_or_pull_deletes_store_and_wrapper(monkeypatch, tmp_path):
             stdout = ""
             stderr = "boom"
         return _CP()
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
 
     workdir = tmp_path / "wd"   # kein .git -> Fresh-Clone-Pfad
     try:
-        ca._git_clone_or_pull("https://github.com/o/r", "main", workdir)
+        ag._git_clone_or_pull("https://github.com/o/r", "main", workdir)
     except RuntimeError:
         pass
     assert seen.get("store_during") is True and seen.get("wrap_during") is True
@@ -372,12 +373,12 @@ def test_diagnose_clone_failure_flags_auth_when_branch_visible(monkeypatch):
             stdout = "abc\trefs/heads/main\n"   # Branch IST remote sichtbar
             stderr = ""
         return _CP()
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
 
-    msg = ca._diagnose_clone_failure(
+    msg = ag._diagnose_clone_failure(
         "https://github.com/o/r", "main",
         "fatal: Remote branch main not found in upstream origin",
-        cred=ca._Cred(env={}))
+        cred=ag._Cred(env={}))
     assert "AUTH" in msg
     assert "Auth/Token" in msg
 
@@ -396,11 +397,11 @@ def test_diagnose_clone_failure_passthrough_for_real_branch_miss(monkeypatch):
             stdout = ""              # ls-remote leer -> Branch fehlt echt
             stderr = ""
         return _CP()
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
 
     raw = "fatal: Remote branch nope not found in upstream origin"
-    msg = ca._diagnose_clone_failure("https://github.com/o/r", "nope", raw,
-                                     cred=ca._Cred(env={"GIT_ASKPASS": "x"}))
+    msg = ag._diagnose_clone_failure("https://github.com/o/r", "nope", raw,
+                                     cred=ag._Cred(env={"GIT_ASKPASS": "x"}))
     assert "AUTH" not in msg
     assert raw in msg
 
@@ -414,11 +415,11 @@ def test_diagnose_clone_failure_empty_reprobe_without_cred_is_auth(monkeypatch):
             stdout = ""              # anonymer Re-Probe sieht 0 Refs
             stderr = ""
         return _CP()
-    monkeypatch.setattr(ca, "_run_git", fake_run_git)
+    monkeypatch.setattr(ag, "_run_git", fake_run_git)
 
     raw = "fatal: Remote branch main not found in upstream origin"
-    msg = ca._diagnose_clone_failure("https://github.com/o/r", "main", raw,
-                                     cred=ca._Cred(env={}))
+    msg = ag._diagnose_clone_failure("https://github.com/o/r", "main", raw,
+                                     cred=ag._Cred(env={}))
     assert "AUTH" in msg
     assert raw in msg
 
@@ -426,6 +427,6 @@ def test_diagnose_clone_failure_empty_reprobe_without_cred_is_auth(monkeypatch):
 def test_diagnose_clone_failure_passthrough_for_other_errors():
     """Andere Clone-Fehler (kein 'not found in upstream') unveraendert."""
     raw = "fatal: could not create work tree dir: Permission denied"
-    msg = ca._diagnose_clone_failure("https://github.com/o/r", "main", raw,
-                                     cred=ca._Cred(env={}))
+    msg = ag._diagnose_clone_failure("https://github.com/o/r", "main", raw,
+                                     cred=ag._Cred(env={}))
     assert msg == f"git clone failed: {raw}"

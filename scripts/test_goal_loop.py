@@ -359,7 +359,7 @@ def test_goal_loop_merge_on_accept_merges(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     bc.ensure_dirs()
     calls = {}
-    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base",
+    monkeypatch.setattr(ld.adapter_git, "merge_accepted_to_base",
                         lambda repo, branch, base_branch, workdir:
                         calls.update(repo=repo, branch=branch,
                                      base=base_branch) or "deadbee")
@@ -380,7 +380,7 @@ def test_goal_loop_merge_off_by_default(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     bc.ensure_dirs()
     called = {"merge": False}
-    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base",
+    monkeypatch.setattr(ld.adapter_git, "merge_accepted_to_base",
                         lambda **k: called.__setitem__("merge", True) or "x")
     summary = ld.run_goal_loop(
         goal="g", done_criteria=["c"], repo="r", base_branch="main",
@@ -397,7 +397,7 @@ def test_goal_loop_merge_failure_keeps_accepted(monkeypatch, tmp_path):
 
     def boom(**k):
         raise RuntimeError("merge conflict bridge/x -> main")
-    monkeypatch.setattr(ld.codex_adapter, "merge_accepted_to_base", boom)
+    monkeypatch.setattr(ld.adapter_git, "merge_accepted_to_base", boom)
     summary = ld.run_goal_loop(
         goal="g", done_criteria=["c"], repo="r", base_branch="main",
         max_rounds=3, round_timeout=5, interval=1,
@@ -483,7 +483,7 @@ def test_goal_loop_escalation_pushes_loop_branch(monkeypatch, tmp_path):
         pushed["branch"] = branch
         return True
 
-    monkeypatch.setattr(ld.codex_adapter, "push_branch_on_escalation", fake_push)
+    monkeypatch.setattr(ld.adapter_git, "push_branch_on_escalation", fake_push)
     summary = ld.run_goal_loop(
         goal="G", done_criteria=["ambiguous one"], repo="r", base_branch="main",
         max_rounds=3, round_timeout=5, interval=1,
@@ -500,7 +500,7 @@ def test_goal_loop_accepted_does_not_push_escalation(monkeypatch, tmp_path):
     ld = _reload_as_a(monkeypatch, tmp_path)
     bc.ensure_dirs()
     called = {"push": False}
-    monkeypatch.setattr(ld.codex_adapter, "push_branch_on_escalation",
+    monkeypatch.setattr(ld.adapter_git, "push_branch_on_escalation",
                         lambda **k: called.__setitem__("push", True) or True)
     summary = ld.run_goal_loop(
         goal="g", done_criteria=["c"], repo="r", base_branch="main",

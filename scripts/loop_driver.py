@@ -18,6 +18,7 @@ from pathlib import Path
 import bridge_common as bc
 import runners  # noqa: F401 -- registers echo + increment
 import codex_adapter  # noqa: F401
+import adapter_git
 import claude_adapter  # noqa: F401
 
 STATE_DIR = Path(__file__).resolve().parent / "state"
@@ -727,7 +728,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
             if merge_on_accept:
                 workdir = STATE_DIR / "work" / loop_id
                 try:
-                    new_base = codex_adapter.merge_accepted_to_base(
+                    new_base = adapter_git.merge_accepted_to_base(
                         repo=repo, branch=loop_branch, base_branch=base_branch,
                         workdir=workdir)
                     merged = True
@@ -806,7 +807,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
     if escalated:
         workdir = STATE_DIR / "work" / loop_id
         try:
-            escalation_pushed = codex_adapter.push_branch_on_escalation(
+            escalation_pushed = adapter_git.push_branch_on_escalation(
                 repo=repo, branch=loop_branch, workdir=workdir)
         except Exception:  # noqa: BLE001 — never crash on the escalation push
             escalation_pushed = False

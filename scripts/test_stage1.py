@@ -73,16 +73,17 @@ def _init_local_repo(tmp: Path) -> tuple[Path, Path]:
 
 
 def test_git_clone_branch_commit_push() -> None:
-    import codex_adapter as ca
+    import adapter_git as ag
+    import codex_adapter as ca  # noqa: F401 — kept for other tests in module
     tmp = Path(tempfile.mkdtemp(prefix="git-s1-"))
     remote, work_parent = _init_local_repo(tmp)
-    workdir = ca._git_clone_or_pull(str(remote), "main", work_parent / "t1")
+    workdir = ag._git_clone_or_pull(str(remote), "main", work_parent / "t1")
     assert (workdir / "README.md").exists(), "clone did not bring README"
-    ca._git_checkout_branch(workdir, "bridge/task-T1")
+    ag._git_checkout_branch(workdir, "bridge/task-T1")
     (workdir / "new_file.txt").write_text("codex wrote this\n", encoding="utf-8")
-    changed = ca._git_status_porcelain(workdir)
+    changed = ag._git_status_porcelain(workdir)
     assert "new_file.txt" in " ".join(changed), f"change not seen: {changed}"
-    commit = ca._git_commit_and_push(workdir, "bridge/task-T1", "task T1")
+    commit = ag._git_commit_and_push(workdir, "bridge/task-T1", "task T1")
     assert commit and len(commit) >= 7, f"no commit hash: {commit!r}"
     print("  git OK -- clone -> branch -> change -> commit -> push, hash returned")
 

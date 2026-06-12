@@ -14,6 +14,7 @@ import shutil
 
 import pytest
 
+import adapter_git as ag
 import codex_adapter as ca
 import live_mirror as lm
 
@@ -34,7 +35,7 @@ def test_live_mirror_detects_regression(monkeypatch):
     (_commits_ahead_of_base sees nothing), the adapter falls back to the pre-fix
     'no change' behaviour. The mirror MUST then report divergence (exit 1),
     otherwise it would be a green test that proves nothing (L1/P006)."""
-    monkeypatch.setattr(ca, "_commits_ahead_of_base", lambda *a, **k: [])
+    monkeypatch.setattr(ag, "_commits_ahead_of_base", lambda *a, **k: [])
     code, line = lm.run_mirror()
     assert code == 1, f"mirror failed to detect the regression (got exit {code}): {line}"
     assert "Divergenz" in line
