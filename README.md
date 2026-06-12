@@ -289,6 +289,23 @@ claimed_at:
   baubar — der `dangerous_action`-Wächter des Goal-Loops matcht zwangsläufig
   die Secret-Muster im generierten Diff (Gate-vs-Gate).
 
+### Risk-Level-Policy (kind/adapter → read/build/ops)
+
+`scripts/risk_policy.py` erzwingt eine deklarative Policy: jedes Task-`kind`
+hat ein Risk-Level (`echo`/`review`/`research` → read, `implement`/`test` →
+build), jeder `adapter` eine Capability (`codex` → build; `echo`/`claude`/
+`increment` → read). `ops` (Scheduled Tasks, Push/Merge in die Base, Admin)
+erreicht kein kind — Ops-Arbeit läuft nie über die Bridge, nur interaktiv.
+Geprüft fail-closed an drei Punkten: `handoff_write` (Exit 3, kein Override),
+`handoff_poll` (Error-Result, Task archiviert) und `job_poll` (rc 2, Todo
+bleibt offen). Zusätzlich scannt R2 den AUFTRAGSTEXT auf Ops-Verben
+(`schtasks`, `Register-ScheduledTask`, Push/Merge auf main/master, Admin-PIN)
+— bewusst NICHT den gebauten Diff (Gate-vs-Gate, Lehre L12) und NICHT das
+Frontmatter (FP-Fläche Repo-URLs). Unbekannte kind/adapter-Werte werden
+abgelehnt (R3); neue Werte brauchen einen bewussten Eintrag in der
+Policy-Tabelle (der Drift-Test macht die Suite sonst rot).
+Spec: `docs/superpowers/specs/2026-06-12-risk-level-mapping-design.md`.
+
 ## Verifizierter Stand (Stufe 3 live, 2026-06-03)
 
 - ✅ **Stufe 1 (echter codex-Worker) live vertrags-bewiesen:** A schickt
@@ -336,7 +353,7 @@ claimed_at:
   Resultate zurueck (`POST /api/jobs/<id>/result`). Auf Laptop B aus
   `C:\Users\domes\AI\dual-bridge\scripts` starten, z.B.
   `python -X utf8 .\job_poll.py --once`.
-- ✅ **181 Tests grün** (Collection + voller pytest-Lauf).
+- ✅ **403 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
 > Der **freie Goal-Loop** und der DCO-HTTP-Job-Pull sind gebaut. Fuer produktive
