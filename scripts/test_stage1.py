@@ -74,7 +74,6 @@ def _init_local_repo(tmp: Path) -> tuple[Path, Path]:
 
 def test_git_clone_branch_commit_push() -> None:
     import adapter_git as ag
-    import codex_adapter as ca  # noqa: F401 — kept for other tests in module
     tmp = Path(tempfile.mkdtemp(prefix="git-s1-"))
     remote, work_parent = _init_local_repo(tmp)
     workdir = ag._git_clone_or_pull(str(remote), "main", work_parent / "t1")

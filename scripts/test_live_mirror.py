@@ -15,7 +15,6 @@ import shutil
 import pytest
 
 import adapter_git as ag
-import codex_adapter as ca
 import live_mirror as lm
 
 pytestmark = pytest.mark.skipif(

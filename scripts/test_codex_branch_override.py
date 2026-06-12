@@ -181,7 +181,7 @@ def test_resolve_https_credential_token_in_file_not_argv_or_env(monkeypatch):
     NICHT in env-Values (kein Env-Leak) und NICHT auf einer git-Kommandozeile."""
     monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=github.com\nusername=bob\npassword=ghp_secrettoken\n"))
-    cred = ca._resolve_https_credential("https://github.com/owner/private-repo")
+    cred = ag._resolve_https_credential("https://github.com/owner/private-repo")
     try:
         # env traegt nur Pfade/Flags, KEIN Token:
         assert set(cred.env) == {"GIT_ASKPASS", "GIT_BRIDGE_CREDFILE",
@@ -256,7 +256,7 @@ def test_resolve_https_credential_cleans_store_if_wrapper_fails(monkeypatch):
     import glob
     import tempfile
     before = set(glob.glob(tempfile.gettempdir() + "/bridge-cred-*.store"))
-    cred = ca._resolve_https_credential("https://github.com/o/r")
+    cred = ag._resolve_https_credential("https://github.com/o/r")
     after = set(glob.glob(tempfile.gettempdir() + "/bridge-cred-*.store"))
     assert cred.env == {} and cred.store_path is None
     assert after == before    # keine neue store-Datei uebrig
@@ -268,7 +268,7 @@ def test_resolve_https_credential_urlencodes_special_chars(monkeypatch):
     Zerbrechen des Eintrags. (Der fruehere inline-`!sh`-Helper war hier verwundbar.)"""
     monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "protocol=https\nhost=h.example\nusername=a'b\npassword=p:w@d$(x) y\n"))
-    cred = ca._resolve_https_credential("https://h.example/o/r")
+    cred = ag._resolve_https_credential("https://h.example/o/r")
     try:
         content = cred.store_path.read_text(encoding="utf-8")
         # genau EINE Zeile, alle Sonderzeichen prozent-codiert, kein rohes $( ) ' @ :
@@ -314,7 +314,7 @@ def test_askpass_helper_roundtrips_special_chars(tmp_path):
 def test_resolve_https_credential_skips_local_and_ssh():
     """Lokale/SSH-Remotes brauchen keinen Helper -> leeres _Cred, keine Datei."""
     for r in ("C:/tmp/origin.git", "git@github.com:o/r.git", "/home/x/origin"):
-        cred = ca._resolve_https_credential(r)
+        cred = ag._resolve_https_credential(r)
         assert cred.env == {}
         assert cred.store_path is None and cred.wrapper_path is None
 
@@ -322,7 +322,7 @@ def test_resolve_https_credential_skips_local_and_ssh():
 def test_resolve_https_credential_empty_when_fill_fails(monkeypatch):
     """`git credential fill` rc!=0 -> leeres _Cred (git nutzt seine eigene Kette)."""
     monkeypatch.setattr(ag.subprocess, "run", _fake_fill("", returncode=1))
-    cred = ca._resolve_https_credential("https://github.com/o/r")
+    cred = ag._resolve_https_credential("https://github.com/o/r")
     assert cred.env == {} and cred.store_path is None
 
 
@@ -330,7 +330,7 @@ def test_resolve_https_credential_empty_when_no_host(monkeypatch):
     """Ohne host (oder user/pw) -> leeres _Cred, keine halbe store-Zeile."""
     monkeypatch.setattr(ag.subprocess, "run", _fake_fill(
         "username=bob\npassword=tok\n"))   # kein host
-    cred = ca._resolve_https_credential("https://github.com/o/r")
+    cred = ag._resolve_https_credential("https://github.com/o/r")
     assert cred.env == {} and cred.store_path is None
 
 

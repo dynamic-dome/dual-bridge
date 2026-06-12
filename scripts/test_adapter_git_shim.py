@@ -8,6 +8,7 @@ Schuetzt drei Invarianten des Refactors:
    `adapter_git.<name>(` auf — nackte Aufrufe wuerden Monkeypatches ins Leere
    laufen lassen (Spec-Hauptrisiko "Patches ins Leere").
 """
+import re
 from pathlib import Path
 
 import adapter_git as ag
@@ -43,8 +44,8 @@ def test_remaining_calls_use_namespace():
     src = Path(ca.__file__).read_text(encoding="utf-8")
     for lineno, line in enumerate(src.splitlines(), 1):
         stripped = line.strip()
-        if stripped.startswith("#") or "import" in line:
+        if stripped.startswith(("#", "import ", "from ")):
             continue
         for name in _MOVED_FUNCS:
-            if f"{name}(" in line:
+            if re.search(rf"(?<![\w.]){re.escape(name)}\(", line):
                 assert f"adapter_git.{name}(" in line, f"Zeile {lineno}: {line!r}"

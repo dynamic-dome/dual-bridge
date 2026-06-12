@@ -1,6 +1,6 @@
 """Codex worker adapter for the Dual-Laptop-Bridge (Stage 1).
 
-Owns the real `codex exec` call plus the git clone/branch/commit/push dance.
+Owns the real `codex exec` call; the git clone/branch/commit/push scaffolding lives in adapter_git (extracted 2026-06-12) and is only orchestrated here and re-exported as a back-compat shim.
 Knows NOTHING about the bridge (no frontmatter, no Sharepoint paths) -- it takes
 a task text + repo and returns a CodexResult. Pure stdlib.
 
