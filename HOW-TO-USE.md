@@ -56,7 +56,7 @@ Auf Laptop B vorher Endpoint setzen:
    Endpoint-Modell.
 2. **Tests laufen lassen** (Ground Truth vor Änderungen):
    `cd ~/AI/dual-bridge/scripts && python -X utf8 -m pytest -q`
-   — erwartet **430 grün**. Schneller Snapshot des Bridge-Zustands:
+   — erwartet **431 grün**. Schneller Snapshot des Bridge-Zustands:
    `python bridge_status.py` (read-only, ändert nichts).
 3. Erst dann ändern. README ist die Detailreferenz.
 
@@ -71,7 +71,7 @@ Auf Laptop B vorher Endpoint setzen:
   `bridge_notify.py` (Telegram, lokal getriggert, idempotent).
 - ✅ **Overnight-Scheduler** `bridge_overnight.py`: arbeitet `docs/overnight/*.md`
   nachts als goal-loop ab, Morgen-Digest per Telegram (read-mostly, fail-soft,
-  DCO-ready). + 430 Tests grün.
+  DCO-ready). + 431 Tests grün.
 - ✅ **HTTP-Job-Pull fuer DCO** `scripts/job_poll.py`: pollt
   `GET /api/jobs/next`, verarbeitet den Job im goal-loop und meldet per
   `POST /api/jobs/<id>/result` zurueck. Auf Laptop B aus

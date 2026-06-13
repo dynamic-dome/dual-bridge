@@ -179,3 +179,17 @@ def test_goal_loop_routes_claude_build_to_its_builder():
     # the text-only 'claude' reviewer and codex keep the codex default (None)
     assert ld._goal_build_runner("claude") is None
     assert ld._goal_build_runner("codex") is None
+
+
+def test_nonzero_exit_no_diff_is_error_even_with_text(tmp_path):
+    # Codex-Verifier 2026-06-13: a failed claude run (exit!=0) that produced NO
+    # build must be an error even if it printed text — the text is then an error
+    # message, not a build, and must not masquerade as done.
+    origin = _make_origin(tmp_path)
+    fake = _fake_claude(tmp_path, writes="README.md", body="base\n", exit_code=1,
+                        answer="Error: konnte den Task nicht umsetzen")
+    res = cb.run_claude_build(
+        auftrag="x", repo=origin, base_branch="main", task_id="T8",
+        workroot=tmp_path / "work", claude_bin=fake, timeout=60)
+    assert res.status == "error"
+    assert "kein Diff/Build" in (res.error_text or "")

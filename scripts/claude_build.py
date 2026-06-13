@@ -104,13 +104,21 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
         workdir, branch, base_branch, task_id, f"bridge: task {task_id}",
         no_change_note="claude gab nur Text, keine Datei-Aenderung")
 
-    if outcome.status == "done" and outcome.branch is None and not antwort:
-        # No diff AND no text → genuine failure; now the exit code matters.
-        return RunnerResult(
-            status="error",
-            error_text=(f"claude exit {proc.returncode}: leere Antwort, kein Diff"
-                        if proc.returncode else "claude: leere Antwort, kein Diff"),
-            stderr_excerpt=_tail(proc.stderr))
+    # No build artifact (finalize_build found neither a diff nor a self-commit):
+    # distinguish an honest no-change from a failed run. A nonzero exit with no
+    # build must NOT masquerade as done, even when claude printed text (P007 /
+    # Codex-Verifier 2026-06-13) — that text is an error message, not a build.
+    if outcome.status == "done" and outcome.branch is None:
+        if proc.returncode != 0:
+            return RunnerResult(
+                status="error", antwort=antwort,
+                error_text=f"claude exit {proc.returncode}: kein Diff/Build erzeugt",
+                stderr_excerpt=_tail(proc.stderr))
+        if not antwort:
+            return RunnerResult(
+                status="error", error_text="claude: leere Antwort, kein Diff",
+                stderr_excerpt=_tail(proc.stderr))
+        # clean exit (0) + text but no diff → honest no-change (done + note below).
 
     note = outcome.note
     if proc.returncode != 0 and outcome.status == "done":
