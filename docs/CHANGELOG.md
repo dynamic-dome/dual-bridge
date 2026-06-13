@@ -8,6 +8,19 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Hinzugefuegt
+- **`claude-build`-Adapter (symmetrisch zu codex, `scripts/claude_build.py`):**
+  Neuer Builder-Adapter mit `capability=build`, der `claude -p` agentic (Tools ein)
+  in einem Wegwerf-Clone ausführt, einen Branch `bridge/task-<id>` committet und
+  einen Diff zurückgibt — strukturell identisch zum codex-Adapter. Für den
+  symmetrischen Loop (claude baut / codex reviewed oder umgekehrt). Shared Utilities:
+  `scripts/subprocess_util.py` (tree-kill, abstrahiert aus codex-Adapter) und
+  `adapter_git.finalize_build` (gemeinsamer Commit/Diff-Abschluss). Risk-Policy:
+  `capability=build` ist nun für `kind=implement|test` + `adapter=claude-build`
+  freigegeben. Fake-CLI-Tests im pytest-Lauf abgedeckt; Real-Binary-Live-Proof und
+  DCO-Miniapp-Preset (`BRIDGE_PRESETS` + Compose-Tests) stehen noch aus.
+  Suite 411 → 427 (16 neue Tests).
+
 ### Behoben
 - **Smoke-Preset (echo·echo) goal-loop-tauglich (#7904 / L20):** Der echo-Runner
   produzierte einen LEEREN Diff, den der diff-bewertende Reviewer der DCO-Bridge

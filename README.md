@@ -87,7 +87,7 @@ cd ~/AI/dual-bridge/scripts
 python handoff_poll.py --watch                 # pollt lane-B-to-A/outbox, ruft claude -p
 ```
 
-`--adapter` wählt den Runner beim Empfänger (`echo`/`codex`/`claude`); `--to`
+`--adapter` wählt den Runner beim Empfänger (`echo`/`codex`/`claude`/`claude-build`); `--to`
 überschreibt den Ziel-Endpoint (Default: der Peer der eigenen Sende-Lane).
 Einmal-Durchlauf statt Dauerschleife: dieselben Skripte ohne `--watch`.
 
@@ -144,7 +144,9 @@ aber `config.json`.
 | `DUAL_BRIDGE_REPO_ALLOWLIST` | codex-Repo-Allowlist, Komma-getrennte fnmatch-Patterns | leer = alle erlaubt |
 | `DUAL_BRIDGE_CODEX_BIN` | Pfad zum `codex`-Binary | auto (`shutil.which`) |
 | `DUAL_BRIDGE_CODEX_TIMEOUT` | Sekunden, die `codex exec` laufen darf, bevor es gekillt wird (→ Fehler „codex timeout nach Ns"). **Innere** Timeout-Schranke — siehe Hinweis unter der Tabelle | `600` |
-| `DUAL_BRIDGE_CLAUDE_BIN` | Pfad zum `claude`-Binary | auto (`shutil.which`) |
+| `DUAL_BRIDGE_CLAUDE_BIN` | Pfad zum `claude`-Binary (Review-Adapter und `claude-build`) | auto (`shutil.which`) |
+| `DUAL_BRIDGE_CLAUDE_TIMEOUT` | Sekunden, die `claude -p` (claude-build) laufen darf, bevor es gekillt wird. **Innere** Timeout-Schranke — analog zu `DUAL_BRIDGE_CODEX_TIMEOUT` | `600` |
+| `DUAL_BRIDGE_CLAUDE_MAX_TURNS` | Maximale Gesprächsrunden, die `claude -p` im claude-build-Adapter durchläuft | `40` |
 | `TELEGRAM_TOKEN` | Telegram-Bot-Token für den Eskalations-Notifier (mit DCO geteilt) | — |
 | `TELEGRAM_CHAT_ID` | Telegram-Chat-ID, an die der Notifier sendet (mit DCO geteilt) | — |
 | `DUAL_BRIDGE_TG_TOKEN` | Override für `TELEGRAM_TOKEN` (nur dual-bridge) | leer = `TELEGRAM_TOKEN` |
@@ -249,7 +251,7 @@ purpose: handoff
 status: open                        # open → claimed → done → consumed
 task_id: 20260531-134553-044123-1-ab12   # streng validiert (Path-Traversal-Schutz)
 kind: implement                     # echo|implement|research|review|test (Fachabsicht)
-adapter: codex                      # echo|codex|claude (ausführendes Modell)
+adapter: codex                      # echo|codex|claude|claude-build (ausführendes Modell)
 repo:                               # nur für codex: Ziel-Repo
 base_branch: main
 claimed_by:                         # Empfänger füllt beim Claim
@@ -353,7 +355,7 @@ Spec: `docs/superpowers/specs/2026-06-12-risk-level-mapping-design.md`.
   Resultate zurueck (`POST /api/jobs/<id>/result`). Auf Laptop B aus
   `C:\Users\domes\AI\dual-bridge\scripts` starten, z.B.
   `python -X utf8 .\job_poll.py --once`.
-- ✅ **411 Tests grün** (Collection + voller pytest-Lauf).
+- ✅ **427 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
 > Der **freie Goal-Loop** und der DCO-HTTP-Job-Pull sind gebaut. Fuer produktive
