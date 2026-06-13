@@ -301,3 +301,15 @@ def test_job_poll_clean_seed_still_runs() -> None:
         run_fn=fake_run)
     assert rc == 0, rc
     assert len(calls) == 1, "run_fn muss bei sauberem Seed genau einmal laufen"
+
+
+def test_claude_build_is_a_builder():
+    import risk_policy as rp
+    assert rp.ADAPTER_CAPABILITY["claude-build"] == "build"
+    # implement + claude-build is allowed (build == build)
+    assert rp.check_task("implement", "claude-build", "add a function") is None
+    # review + claude-build is a capability mismatch (R1)
+    v = rp.check_task("review", "claude-build", "look at this")
+    assert v is not None and v.rule == "level-mismatch"
+    # the review-only `claude` adapter is unchanged (still read)
+    assert rp.ADAPTER_CAPABILITY["claude"] == "read"

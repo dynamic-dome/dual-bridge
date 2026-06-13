@@ -1011,7 +1011,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-rounds", type=int, required=True,
                         help="Stop after exactly N rounds.")
     parser.add_argument("--adapter", default="increment",
-                        choices=["echo", "increment", "codex", "claude"],
+                        choices=["echo", "increment", "codex", "claude", "claude-build"],
                         help="Runner both sides use per round.")
     # Default None -> resolved via config_value() after parse so the precedence
     # chain CLI flag > env > config.json > hardcoded fallback holds. An explicit
