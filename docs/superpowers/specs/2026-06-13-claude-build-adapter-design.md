@@ -85,7 +85,7 @@ claude -p
                                              #   Permission-Prompt am geschlossenen stdin hängen
   --max-turns 40                             # multi-turn Build (DUAL_BRIDGE_CLAUDE_MAX_TURNS)
   --tools Read,Write,Edit,Bash,Glob,Grep     # eingebaute Coding-Tools (kein "" wie Reviewer)
-  <MCP-Unterdrückung>                        # D4: externe Server NICHT laden (Flag s. Verifikation)
+  --strict-mcp-config                        # D4: externe Server NICHT laden (✅ verifiziert 2026-06-13)
   cwd = workdir (Wegwerf-Klon)               # Datei-Tools wirken auf den Klon (wie codex -C)
   Prompt via stdin (P008)                    # roh, symmetrisch zu codex; nicht als Arg
   env = safe_subprocess_env()                # P009#4: ANTHROPIC_API_KEY/AUTH_TOKEN raus → Abo
@@ -151,16 +151,22 @@ vorgeschaltet. Timeout: `DUAL_BRIDGE_CLAUDE_TIMEOUT` (mirror `*_CODEX_TIMEOUT`,
 4. **Test-Isolation §3**: conftest lenkt Bridge-Root/State auf `tmp_path`; kein Test
    schreibt gegen echten Sharepoint/`state/`/Lock-/Log-Ziele (P015).
 
-## An Implementierungszeit gegen das ECHTE Binary zu verifizieren (P006)
-Fake-CLI beweist nur Mechanik — diese 4 Punkte brauchen einen echten `claude -p`-Lauf:
-- (a) **Exaktes Flag/Syntax zur MCP-Unterdrückung** im `-p`-Modus (Kandidaten:
-  `--strict-mcp-config` mit leerer mcp-Config / `--settings`-mcpServers-Override).
-- (b) **Exakte `--tools`-Werte** für das Coding-Set in dieser Claude-Code-Version.
-- (c) **Self-Commit-Verhalten**: committet `claude -p` mit Bash selbst, oder
-  hinterlässt es Working-Tree-Änderungen? (Beide Pfade sind via `finalize_build`
-  abgedeckt — die Frage steuert nur, welcher dominiert.)
-- (d) **Multi-turn-JSON-Form** (Result-Event — `parse_claude_output` ist schon
-  tolerant, gegen echten Output gegenprüfen).
+## Gegen das ECHTE Binary verifiziert (P006/P007) — ✅ 2026-06-13, claude 2.1.177
+Fake-CLI bewies nur Mechanik; ein echter `claude -p`-Lauf gegen ein privates
+Wegwerf-Repo (`dynamic-dome/claude-build-live-proof`, Allowlist-gepinnt) klärte
+alle 4 Punkte. Positiv-Lauf: `status=done`, Branch `bridge/task-liveproof1`,
+Commit `2aab60e` mit `hello.py`, Ground-Truth via `git ls-remote` + Remote-Klon
+bestätigt. Negativkontrolle (no-op): `status=done, branch=None, note="claude gab
+nur Text, keine Datei-Aenderung"` — kein Phantom-Commit. **Keine Flag-Korrekturen
+nötig**, der Aufruf aus Abschnitt 2 läuft unverändert:
+- (a) **MCP-Unterdrückung**: `--strict-mcp-config` ✅ akzeptiert, kein Fehler, kein
+  externer MCP-Start.
+- (b) **`--tools`**: `Read,Write,Edit,Bash,Glob,Grep` ✅ akzeptiert.
+- (c) **Self-Commit-Verhalten**: claude committet **nicht** selbst → Working-Tree-
+  Pfad dominiert, der Adapter committet+pusht. (Self-Commit-Pfad bleibt via
+  `finalize_build` als Fallback abgedeckt.)
+- (d) **JSON-Form**: `parse_claude_output` + `_real_text` lieferten echte Prosa
+  (`"ok"` bzw. die Build-Zusammenfassung), kein JSON-Dump-Fehlalarm.
 
 ## Reihenfolge der Umsetzung
 1. `subprocess_util` extrahieren + `test_subprocess_util` (codex-Tests grün halten).
