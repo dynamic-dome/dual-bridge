@@ -149,3 +149,19 @@ def test_real_text_suppresses_json_fallback():
     assert cb._real_text("done building") == "done building"
     assert cb._real_text("{not json} summary") == "{not json} summary"
     assert cb._real_text("") == ""
+
+
+def test_registered_via_handoff_poll():
+    # Runners self-register on import. The bridge poller must import claude_build
+    # so adapter=claude-build actually resolves at runtime (not just in tests).
+    import importlib
+    import runners
+    importlib.import_module("handoff_poll")
+    assert "claude-build" in runners.RUNNERS
+
+
+def test_registered_via_loop_driver():
+    import importlib
+    import runners
+    importlib.import_module("loop_driver")
+    assert "claude-build" in runners.RUNNERS

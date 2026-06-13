@@ -20,6 +20,7 @@ import runners  # noqa: F401 -- registers echo + increment
 import codex_adapter  # noqa: F401
 import adapter_git
 import claude_adapter  # noqa: F401
+import claude_build  # noqa: F401 -- registers claude-build
 
 STATE_DIR = Path(__file__).resolve().parent / "state"
 

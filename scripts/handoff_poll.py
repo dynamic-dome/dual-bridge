@@ -22,6 +22,7 @@ import risk_policy
 import runners  # noqa: F401 -- registers echo
 import codex_adapter  # noqa: F401 -- registers codex
 import claude_adapter  # noqa: F401 -- registers claude
+import claude_build  # noqa: F401 -- registers claude-build
 
 CODEX_WORKROOT = bc.Path(
     os.environ.get("DUAL_BRIDGE_WORKROOT") or (bc.Path.home() / "dual-bridge-work")
