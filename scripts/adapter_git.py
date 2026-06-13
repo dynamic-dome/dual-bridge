@@ -20,8 +20,20 @@ import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 from bridge_common import safe_subprocess_env
+
+
+class BuildOutcome(NamedTuple):
+    status: str                    # "done" | "error"
+    branch: str | None
+    commit: str | None
+    changed_files: list
+    diff: str | None
+    error_text: str | None
+    stderr_excerpt: str | None
+    note: str | None
 
 
 def _run_git(workdir: Path | None, *args: str,
@@ -503,3 +515,50 @@ def _git_diff(workdir: Path, base_branch: str) -> str:
                   f"(Gesamtlaenge {len(cp.stdout)}); Reviewer urteilt auf dem "
                   "gezeigten Ausschnitt ...]\n")
     return text
+
+
+def _tail(text: str | None, limit: int = 2000) -> str | None:
+    """Last `limit` chars of text, for error excerpts. Returns None for empty input."""
+    if not text:
+        return None
+    return text[-limit:]
+
+
+def finalize_build(workdir: Path, branch: str, base_branch: str, task_id: str,
+                   commit_msg: str,
+                   no_change_note: str = "nur Text, keine Datei-Aenderung",
+                   ) -> BuildOutcome:
+    """Detect a builder's changes (uncommitted working-tree OR a self-commit that
+    left HEAD ahead of base), commit+push when needed, and return the diff.
+
+    Shared by the codex and claude builders. Never raises. The self-commit branch
+    force-with-lease pushes the agent's own commit so the next round's
+    clone_or_pull (reset --hard origin/<branch>) cannot drop it (continuity,
+    Codex review MAJOR 2026-06-03).
+    """
+    changed = _git_status_porcelain(workdir)
+    if not changed:
+        ahead = _commits_ahead_of_base(workdir, base_branch)
+        if ahead:
+            diff = _git_diff(workdir, base_branch)
+            changed_files = _changed_files_vs_base(workdir, base_branch)
+            push = _run_git(workdir, "push", "--force-with-lease", "origin", branch)
+            if push.returncode != 0:
+                return BuildOutcome("error", branch, ahead[0], changed_files, diff,
+                                    f"push fehlgeschlagen (lokaler Commit {ahead[0]} auf B)",
+                                    _tail(push.stderr), None)
+            return BuildOutcome("done", branch, ahead[0], changed_files, diff,
+                                None, None, None)
+        return BuildOutcome("done", None, None, [], None, None, None, no_change_note)
+    try:
+        commit = _git_commit_and_push(workdir, branch, commit_msg)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if msg.startswith("PUSH_FAILED::"):
+            _, local_hash, stderr = msg.split("::", 2)
+            return BuildOutcome("error", branch, local_hash, changed, None,
+                                f"push fehlgeschlagen (lokaler Commit {local_hash} auf B)",
+                                _tail(stderr), None)
+        return BuildOutcome("error", branch, None, changed, None, msg, None, None)
+    diff = _git_diff(workdir, base_branch)
+    return BuildOutcome("done", branch, commit, changed, diff, None, None, None)

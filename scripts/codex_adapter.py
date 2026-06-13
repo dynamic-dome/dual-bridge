@@ -347,53 +347,16 @@ def run_codex_task(
         return CodexResult(status="error", error_text="codex: leere Antwort",
                            stderr_excerpt=_tail(proc.stderr))
 
-    # 6. did codex change files? Two ways forward: an uncommitted working-tree
-    #    change (we commit it), OR codex already self-committed (0.136 under
-    #    danger-full-access) so the tree is clean but HEAD is ahead of base. Only
-    #    when BOTH are empty did codex truly produce no change.
-    changed = adapter_git._git_status_porcelain(workdir)
-    if not changed:
-        ahead = adapter_git._commits_ahead_of_base(workdir, base_branch)
-        if ahead:
-            # codex self-committed: surface its commit + diff as real progress
-            # instead of dropping it as "no change" (seed-02 round-2 bug). The
-            # commit is local-only — push it, or the next round's clone_or_pull
-            # resets --hard to origin/<branch> and drops it (continuity break,
-            # Codex review MAJOR 2026-06-03). On push failure keep the local hash
-            # but flag it, mirroring the normal commit+push path below.
-            diff = adapter_git._git_diff(workdir, base_branch)
-            changed_files = adapter_git._changed_files_vs_base(workdir, base_branch)
-            push = adapter_git._run_git(workdir, "push", "--force-with-lease", "origin", branch)
-            if push.returncode != 0:
-                return CodexResult(status="error", antwort=antwort, branch=branch,
-                                   commit=ahead[0], changed_files=changed_files,
-                                   diff=diff,
-                                   error_text=f"push fehlgeschlagen (lokaler Commit "
-                                              f"{ahead[0]} auf B)",
-                                   stderr_excerpt=_tail(push.stderr))
-            return CodexResult(status="done", antwort=antwort, branch=branch,
-                               commit=ahead[0], changed_files=changed_files,
-                               diff=diff)
-        return CodexResult(status="done", antwort=antwort, branch=None,
-                           commit=None, changed_files=[],
-                           note="codex gab nur Text, keine Datei-Aenderung")
-
-    # 7. commit + push (keep answer even if push fails)
-    try:
-        commit = adapter_git._git_commit_and_push(workdir, branch, f"bridge: task {task_id}")
-    except RuntimeError as exc:
-        msg = str(exc)
-        if msg.startswith("PUSH_FAILED::"):
-            _, local_hash, stderr = msg.split("::", 2)
-            return CodexResult(status="error", antwort=antwort, branch=branch,
-                               commit=local_hash, changed_files=changed,
-                               error_text=f"push fehlgeschlagen (lokaler Commit {local_hash} auf B)",
-                               stderr_excerpt=_tail(stderr))
-        return CodexResult(status="error", antwort=antwort, branch=branch,
-                           changed_files=changed, error_text=msg)
-    diff = adapter_git._git_diff(workdir, base_branch)
-    return CodexResult(status="done", antwort=antwort, branch=branch,
-                       commit=commit, changed_files=changed, diff=diff)
+    # 6+7. detect change (working-tree OR self-commit), commit+push, diff —
+    #      shared with the claude builder via adapter_git.finalize_build. The
+    #      no_change_note preserves codex's exact wording (bit-identical output).
+    outcome = adapter_git.finalize_build(
+        workdir, branch, base_branch, task_id, f"bridge: task {task_id}",
+        no_change_note="codex gab nur Text, keine Datei-Aenderung")
+    return CodexResult(status=outcome.status, antwort=antwort, branch=outcome.branch,
+                       commit=outcome.commit, changed_files=outcome.changed_files,
+                       diff=outcome.diff, error_text=outcome.error_text,
+                       stderr_excerpt=outcome.stderr_excerpt, note=outcome.note)
 
 
 def _tail(text: str | None, limit: int = 2000) -> str | None:
