@@ -524,7 +524,7 @@ def _tail(text: str | None, limit: int = 2000) -> str | None:
     return text[-limit:]
 
 
-def finalize_build(workdir: Path, branch: str, base_branch: str, task_id: str,
+def finalize_build(workdir: Path, branch: str, base_branch: str,
                    commit_msg: str,
                    no_change_note: str = "nur Text, keine Datei-Aenderung",
                    ) -> BuildOutcome:

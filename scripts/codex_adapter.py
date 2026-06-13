@@ -351,7 +351,7 @@ def run_codex_task(
     #      shared with the claude builder via adapter_git.finalize_build. The
     #      no_change_note preserves codex's exact wording (bit-identical output).
     outcome = adapter_git.finalize_build(
-        workdir, branch, base_branch, task_id, f"bridge: task {task_id}",
+        workdir, branch, base_branch, f"bridge: task {task_id}",
         no_change_note="codex gab nur Text, keine Datei-Aenderung")
     return CodexResult(status=outcome.status, antwort=antwort, branch=outcome.branch,
                        commit=outcome.commit, changed_files=outcome.changed_files,

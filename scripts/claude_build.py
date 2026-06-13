@@ -101,7 +101,7 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
     # The DIFF is the artifact (P007), not the text. finalize_build handles the
     # working-tree AND self-commit paths.
     outcome = adapter_git.finalize_build(
-        workdir, branch, base_branch, task_id, f"bridge: task {task_id}",
+        workdir, branch, base_branch, f"bridge: task {task_id}",
         no_change_note="claude gab nur Text, keine Datei-Aenderung")
 
     # No build artifact (finalize_build found neither a diff nor a self-commit):
