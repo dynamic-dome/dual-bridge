@@ -8,6 +8,22 @@ Commit-Hashes verweisen auf `main`.
 
 ## [Unreleased]
 
+### Behoben
+- **Smoke-Preset (echo·echo) goal-loop-tauglich (#7904 / L20):** Der echo-Runner
+  produzierte einen LEEREN Diff, den der diff-bewertende Reviewer der DCO-Bridge
+  nie accepten konnte → das Smoke-Preset eskalierte strukturell auf `max_rounds`
+  (live #7903). Zwei dual-bridge-seitige Fixes: (1) `runners.run_echo` baut bei
+  gesetztem `repo` (goal-loop-Building-Kontext) einen deterministischen Marker
+  `bridge-smoke.txt` (EINE feste Datei, `task_id` im Inhalt → nicht-leerer Diff,
+  keine Akkumulation unter merge_on_accept) und committet ihn auf den Loop-Branch;
+  ohne `repo` bleibt echo reiner Text (back-compat). (2) `loop_driver` routet im
+  goal-loop `--adapter echo` jetzt tatsächlich auf den echo-Runner
+  (`_goal_build_runner`) — vorher baute der goal-loop IMMER mit codex und ignorierte
+  `--adapter`, weshalb der echo-Builder nie lief. Suite 406 → 411 (5 neue Tests
+  gegen echtes lokales git). **Offen (DCO-seitig):** das Smoke-Preset in der
+  Miniapp braucht noch einen Default-DoD, der die Marker-Datei referenziert, damit
+  der Reviewer one-click accepten kann.
+
 ### Geändert
 - **git-Gerüst in eigenes Modul extrahiert (`scripts/adapter_git.py`)** — Klon/
   Credential/Branch/Diff/Commit/Push-Helfer + `merge_accepted_to_base`/

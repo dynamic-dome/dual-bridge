@@ -647,6 +647,23 @@ def _escalate(loop_id, trigger, round_no, branch, commit, goal, done_criteria,
                      question=question, progress=progress)
 
 
+def _goal_build_runner(adapter: str | None):
+    """Builder selection for goal-loop mode.
+
+    Historically the goal-loop ALWAYS built via codex — `--adapter` was passed in
+    but ignored for the A-side builder. That is exactly why the echo·echo smoke
+    preset could never be accepted: codex (not echo) built, and an empty/garbage
+    smoke build was rejected → max_rounds escalation (#7903 / L20). Route
+    adapter=='echo' to the marker-building echo runner so the smoke exercises the
+    full pipeline. Every other adapter (incl. the 'increment' CLI default and any
+    unknown value) keeps the codex default: the goal-loop assumes a real git
+    builder, and a non-building text runner must not silently slip in as builder.
+    Returns None to mean 'use run_goal_loop's codex default' (unchanged path)."""
+    if adapter == "echo":
+        return runners.RUNNERS["echo"]
+    return None
+
+
 def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                   round_timeout, interval=5, build_runner=None, b_tick=None,
                   loop_id=None, merge_on_accept=False):
@@ -1104,6 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
             goal=goal, done_criteria=criteria, repo=args.repo,
             base_branch=args.base_branch, max_rounds=args.max_rounds,
             round_timeout=args.round_timeout, interval=args.interval,
+            build_runner=_goal_build_runner(args.adapter),
             loop_id=loop_id, merge_on_accept=args.merge_on_accept)
         print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
         if summary["accepted"]:
