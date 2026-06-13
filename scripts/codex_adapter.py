@@ -167,12 +167,12 @@ def _answer_from_json(value: object) -> str:
 
 import os
 import shutil
-import signal
 import subprocess
 from pathlib import Path
 
 from bridge_common import config_value, safe_subprocess_env
 from runners import RunnerResult, register_runner
+from subprocess_util import _kill_process_tree, run_with_tree_kill  # noqa: F401 — _kill_process_tree re-exported for back-compat
 
 import adapter_git
 from adapter_git import (  # noqa: F401 — back-compat shim (Spec 2026-06-12): nur Re-Export, verbleibender Code nutzt diese Namen NICHT
@@ -239,75 +239,11 @@ def _build_codex_cmd(codex_exe: str, workdir: Path, answer_file: Path) -> list[s
     ]
 
 
-def _kill_process_tree(pid: int) -> None:
-    """Kill `pid` AND all of its descendants. Never raises.
-
-    Why a tree-kill and not Popen.kill(): codex is launched as
-    python -> node (codex.js) -> codex.exe, and codex.exe itself spawns MCP
-    children (node/npx for playwright/context7/...). subprocess kill / Windows
-    TerminateProcess hits only the DIRECT child (the node launcher); the real
-    worker codex.exe is a GRANDCHILD and survives, holding the bridge worker slot
-    open indefinitely (live hang 2026-06-09: a goal-loop ran ~50 min past its
-    600s timeout because the orphaned codex.exe kept working). The kill must walk
-    the whole tree:
-      - Windows: `taskkill /T /F /PID <pid>` uses the Win32 process snapshot to
-        terminate the parent and every descendant in one shot. (Plain killpg does
-        not exist on Windows, and Popen.kill leaves grandchildren behind.)
-      - POSIX: kill the process GROUP (the child is started in its own session so
-        the whole group dies together)."""
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(pid)],
-                capture_output=True, stdin=subprocess.DEVNULL,
-            )
-        else:
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-    except Exception:
-        # Best-effort: a kill failure must never mask the timeout error itself.
-        pass
-
-
 def _run_codex_exec(cmd: list[str], workdir: Path, auftrag: str,
                     timeout: int) -> subprocess.CompletedProcess:
-    """Run `codex exec`, returning a CompletedProcess, but on timeout kill the
-    WHOLE process tree (not just the direct child) before re-raising
-    TimeoutExpired.
-
-    subprocess.run(timeout=) would Popen.kill() only the direct child on a
-    timeout, orphaning the codex.exe grandchild (see _kill_process_tree). We
-    drive Popen ourselves so we can hand the real PID to the tree-kill. On POSIX
-    the child gets its own process group (start_new_session) so killpg reaches
-    every descendant; on Windows taskkill /T walks the tree by PID."""
-    popen_kwargs = dict(
-        cwd=str(workdir), stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        # errors="replace": codex/git output on a German Windows console can carry
-        # non-utf8 (cp1252) bytes; a strict decode crashes Popen's reader thread
-        # (UnicodeDecodeError) and the whole exec fails spuriously. Replace, don't
-        # die — the answer text is read from the -o file anyway.
-        text=True, encoding="utf-8", errors="replace", env=safe_subprocess_env(),
-    )
-    if os.name != "nt":
-        popen_kwargs["start_new_session"] = True  # own pgid for killpg
-    proc = subprocess.Popen(cmd, **popen_kwargs)
-    try:
-        stdout, stderr = proc.communicate(input=auftrag, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        _kill_process_tree(proc.pid)
-        # Reap so we don't leak a zombie; ignore whatever trickles out post-kill.
-        try:
-            proc.communicate(timeout=10)
-        except Exception:
-            pass
-        raise exc
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    """Run `codex exec` with whole-tree kill on timeout (shared util). env =
+    safe_subprocess_env() so codex inherits only the allowlisted environment."""
+    return run_with_tree_kill(cmd, workdir, auftrag, timeout, env=safe_subprocess_env())
 
 
 def run_codex_task(
