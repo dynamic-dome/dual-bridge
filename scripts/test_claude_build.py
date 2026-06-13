@@ -100,8 +100,52 @@ def test_repo_not_in_allowlist_rejected(tmp_path, monkeypatch):
 
 
 def test_claude_not_found_is_error(tmp_path):
+    origin = _make_origin(tmp_path)           # local bare repo → clone succeeds
+    missing_bin = str(tmp_path / "nonexistent-claude")
     res = cb.run_claude_build(
-        auftrag="x", repo="https://github.com/ok/repo", base_branch="main",
+        auftrag="x", repo=origin, base_branch="main",
         task_id="T6", workroot=tmp_path / "work",
-        claude_bin=str(tmp_path / "nonexistent-claude"), timeout=60)
+        claude_bin=missing_bin, timeout=60)
     assert res.status == "error"
+    assert "nicht ausführbar" in (res.error_text or "")
+
+
+def test_claude_none_on_path_is_error(tmp_path, monkeypatch):
+    monkeypatch.delenv("DUAL_BRIDGE_CLAUDE_BIN", raising=False)
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    res = cb.run_claude_build(
+        auftrag="x", repo="unused", base_branch="main",
+        task_id="T6b", workroot=tmp_path / "work",
+        claude_bin=None, timeout=60)
+    assert res.status == "error"
+    assert "nicht gefunden" in (res.error_text or "")
+
+
+def test_timeout_is_error(tmp_path):
+    origin = _make_origin(tmp_path)
+    # a fake claude that sleeps longer than the timeout
+    script = tmp_path / "slow_claude.py"
+    script.write_text("import time, sys\ntime.sleep(30)\nsys.exit(0)\n", encoding="utf-8")
+    import sys as _s
+    if _s.platform == "win32":
+        shim = tmp_path / "slow_claude.cmd"
+        shim.write_text(f'@\"{_s.executable}\" \"{script}\" %*\n', encoding="utf-8")
+    else:
+        shim = tmp_path / "slow_claude.sh"
+        shim.write_text(f'#!/bin/sh\nexec \"{_s.executable}\" \"{script}\" \"$@\"\n', encoding="utf-8")
+        shim.chmod(0o755)
+    res = cb.run_claude_build(
+        auftrag="x", repo=origin, base_branch="main", task_id="T7",
+        workroot=tmp_path / "work", claude_bin=str(shim), timeout=1)
+    assert res.status == "error"
+    assert "timeout" in (res.error_text or "").lower()
+
+
+def test_real_text_suppresses_json_fallback():
+    # parse_claude_output's json.dumps fallback (a bracketed string that decodes)
+    assert cb._real_text('[{"type":"result","result":""}]') == ""
+    assert cb._real_text('{"a": 1}') == ""
+    # genuine prose is kept, even with a leading brace that is NOT valid json
+    assert cb._real_text("done building") == "done building"
+    assert cb._real_text("{not json} summary") == "{not json} summary"
+    assert cb._real_text("") == ""

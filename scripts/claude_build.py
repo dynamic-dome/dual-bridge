@@ -14,6 +14,7 @@ for a BUILDER the artifact is the git diff, not the text).
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -70,11 +71,11 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
 
     workdir = Path(workroot) / (workdir_name or task_id)
     # Resolve the real base branch every round (master/main, P007/continuity).
-    _cred = adapter_git._resolve_https_credential(repo)
+    _bb_cred = adapter_git._resolve_https_credential(repo)
     try:
-        base_branch = adapter_git._resolve_base_branch(repo, base_branch, _cred)
+        base_branch = adapter_git._resolve_base_branch(repo, base_branch, _bb_cred)
     finally:
-        _cred.cleanup()
+        _bb_cred.cleanup()
     try:
         adapter_git._git_clone_or_pull(repo, base_branch, workdir, prefer_branch=branch)
         adapter_git._git_checkout_branch(workdir, branch)
@@ -124,7 +125,7 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
         note=note)
 
 
-def _tail(text, limit: int = 2000):
+def _tail(text: str | None, limit: int = 2000) -> str | None:
     if not text:
         return None
     return text[-limit:]
@@ -145,8 +146,7 @@ def _real_text(parsed: str) -> str:
     s = parsed.strip()
     if s and s[0] in "[{":
         try:
-            import json as _json
-            _json.loads(s)
+            json.loads(s)
             # It decoded → it is a raw JSON re-encoding, not real prose. Discard.
             return ""
         except ValueError:
