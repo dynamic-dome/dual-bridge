@@ -165,3 +165,17 @@ def test_registered_via_loop_driver():
     import runners
     importlib.import_module("loop_driver")
     assert "claude-build" in runners.RUNNERS
+
+
+def test_goal_loop_routes_claude_build_to_its_builder():
+    # goal-loop A-side builder selection: claude-build is a REAL git builder, so
+    # the symmetric loop (claude baut / codex reviewt) must use it — not fall back
+    # to the codex default (which is what `None` means).
+    import importlib
+    import runners
+    ld = importlib.import_module("loop_driver")
+    assert ld._goal_build_runner("claude-build") is runners.RUNNERS["claude-build"]
+    assert ld._goal_build_runner("echo") is runners.RUNNERS["echo"]
+    # the text-only 'claude' reviewer and codex keep the codex default (None)
+    assert ld._goal_build_runner("claude") is None
+    assert ld._goal_build_runner("codex") is None

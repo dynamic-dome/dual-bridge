@@ -656,12 +656,18 @@ def _goal_build_runner(adapter: str | None):
     preset could never be accepted: codex (not echo) built, and an empty/garbage
     smoke build was rejected → max_rounds escalation (#7903 / L20). Route
     adapter=='echo' to the marker-building echo runner so the smoke exercises the
-    full pipeline. Every other adapter (incl. the 'increment' CLI default and any
-    unknown value) keeps the codex default: the goal-loop assumes a real git
-    builder, and a non-building text runner must not silently slip in as builder.
+    full pipeline. Route adapter=='claude-build' to the claude builder so the
+    symmetric loop (claude baut / codex reviewt) works in goal-loop mode too — it
+    is a REAL git builder (commits a branch+diff), so the "no text-only runner as
+    builder" guard does not apply. Every other adapter (incl. the 'increment' CLI
+    default, the text-only 'claude' reviewer, and any unknown value) keeps the
+    codex default: the goal-loop assumes a real git builder, and a non-building
+    text runner must not silently slip in as builder.
     Returns None to mean 'use run_goal_loop's codex default' (unchanged path)."""
     if adapter == "echo":
         return runners.RUNNERS["echo"]
+    if adapter == "claude-build":
+        return runners.RUNNERS["claude-build"]
     return None
 
 
@@ -1058,7 +1064,7 @@ def main(argv: list[str] | None = None) -> int:
     # whenever another loop happens to be running.
     # ping-pong with a git-building adapter also needs a repo (the build commits
     # onto the loop branch). The echo/increment text adapters do not.
-    if args.mode == "ping-pong" and args.adapter in ("codex", "claude") and not args.repo:
+    if args.mode == "ping-pong" and args.adapter in ("codex", "claude", "claude-build") and not args.repo:
         print(f"[A] --mode ping-pong --adapter {args.adapter} braucht --repo "
               "(der Build committet auf den Loop-Branch).")
         return 2
