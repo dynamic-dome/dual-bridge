@@ -87,7 +87,7 @@ cd ~/AI/dual-bridge/scripts
 python handoff_poll.py --watch                 # pollt lane-B-to-A/outbox, ruft claude -p
 ```
 
-`--adapter` wählt den Runner beim Empfänger (`echo`/`codex`/`claude`/`claude-build`); `--to`
+`--adapter` wählt den Runner beim Empfänger (`echo`/`codex`/`claude`/`claude-build`/`codex-review`); `--to`
 überschreibt den Ziel-Endpoint (Default: der Peer der eigenen Sende-Lane).
 Einmal-Durchlauf statt Dauerschleife: dieselben Skripte ohne `--watch`.
 
@@ -251,7 +251,7 @@ purpose: handoff
 status: open                        # open → claimed → done → consumed
 task_id: 20260531-134553-044123-1-ab12   # streng validiert (Path-Traversal-Schutz)
 kind: implement                     # echo|implement|research|review|test (Fachabsicht)
-adapter: codex                      # echo|codex|claude|claude-build (ausführendes Modell)
+adapter: codex                      # echo|codex|claude|claude-build|codex-review (ausführendes Modell)
 repo:                               # nur für codex: Ziel-Repo
 base_branch: main
 claimed_by:                         # Empfänger füllt beim Claim

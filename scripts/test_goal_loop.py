@@ -352,6 +352,34 @@ def test_goal_loop_accepted_round_one(monkeypatch, tmp_path):
     assert summary["merged"] is False
 
 
+def test_goal_loop_propagates_reviewer_to_review_task(monkeypatch, tmp_path):
+    """Integration (Verifier NIT 2): run_goal_loop(reviewer=...) must propagate
+    the chosen reviewer all the way through _goal_build_review_round ->
+    write_goal_review_task into the ACTUAL review task's frontmatter. The b_tick
+    reads the task A wrote and asserts the adapter, then answers accepted."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    bc.ensure_dirs()
+    seen = {}
+
+    def tick(task_id):
+        lane = bc.send_lane()
+        doc = (bc.lane_outbox(lane) / f"task-{task_id}.md").read_text(encoding="utf-8")
+        fm, _ = bc.parse_frontmatter(doc)
+        seen["adapter"] = fm.get("adapter")
+        rfm = {"created": bc.now_iso(), "from": "claude@laptop-b",
+               "to": "claude@laptop-a", "status": "done", "task_id": task_id,
+               "kind": "review", "verdict": "accepted", "verdict_reason": "r"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(rfm, "## Antwort\nVERDICT: accepted\n"))
+
+    ld.run_goal_loop(
+        goal="g", done_criteria=["k"], repo="r", base_branch="main",
+        max_rounds=1, round_timeout=5, interval=1,
+        build_runner=_fake_build_factory(["c1"]), b_tick=tick,
+        reviewer="codex-review")
+    assert seen["adapter"] == "codex-review"
+
+
 # --- Task 6b: merge_on_accept integrates the accepted build into base so the
 # next package's fresh clone sees it (cross-package accumulation, 2026-06-07). ---
 

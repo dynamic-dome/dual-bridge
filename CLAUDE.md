@@ -43,7 +43,7 @@ python handoff_collect.py --watch          # wartet aufs Result
 python handoff_poll.py --watch             # claimt + runnt; watchdog-Wakeup wenn installiert
 ```
 Einmal-Durchlauf statt Schleife: dieselben Skripte ohne `--watch`.
-Adapter: `echo` (Smoke) | `codex` (committet Branch `bridge/task-<id>`) | `claude` (Text) | `claude-build` (claude baut, committet Branch `bridge/task-<id>` — symmetrisch zu codex).
+Adapter: `echo` (Smoke) | `codex` (committet Branch `bridge/task-<id>`) | `claude` (Text/Review) | `claude-build` (claude baut, committet Branch `bridge/task-<id>` — symmetrisch zu codex) | `codex-review` (codex reviewt text-only, kein Branch — symmetrisch zu `claude` als Reviewer).
 
 ### 2. Goal-Loop (Stufe 3, autonom mit Reviewer-Verdikt)
 ```bash
