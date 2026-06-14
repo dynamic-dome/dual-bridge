@@ -459,6 +459,56 @@ def write_goal_review_task(loop_id: str, round_no: int, goal: str,
     return task_id
 
 
+def write_relay_review_task(loop_id: str, round_no: int, ziel: str,
+                            leitplanken: list[str], loop_branch: str,
+                            loop_commit: str, diff: str = "",
+                            reviewer: str = "claude") -> str:
+    """Write a relay-loop kind:review task. The reviewer judges whether the diff
+    is a sensible, correct, self-contained EXTENSION toward `ziel` (honoring
+    leitplanken) and answers with one of three markers. escalate has a double
+    role here: 'no sensible extension left' (saturation) OR an owner
+    direction/risk decision. Tool-less reviewer → diff embedded in the prompt.
+    `reviewer` is the adapter name (claude | codex-review)."""
+    bc.ensure_dirs()
+    me = bc.this_endpoint()
+    lane = bc.send_lane()
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "schema_version": "2",
+        "agent": me, "from": me, "to": to, "purpose": "handoff",
+        "status": "open", "task_id": task_id, "kind": "review",
+        "adapter": reviewer,
+        "loop_id": loop_id, "round": str(round_no),
+        "loop_branch": loop_branch, "loop_commit": loop_commit,
+        "payload": f"{loop_branch}@{loop_commit}",
+        "claimed_by": "", "claimed_at": "",
+    }
+    diff_block = diff.strip() or "(kein Diff — der Bau-Agent meldete keine Erweiterung)"
+    lp_block = ("\n".join(f"- {c}" for c in leitplanken)
+                if leitplanken else "(keine — freie Richtung)")
+    body = (
+        f"## Ziel\n{ziel}\n\n"
+        f"## Leitplanken\n{lp_block}\n\n"
+        f"Der Bau-Agent hat auf `{loop_branch}` (Commit `{loop_commit}`) EINEN "
+        "Erweiterungsschritt gebaut. Hier ist NUR der Diff dieses Schritts gegen "
+        "den vorigen Stand. Du hast KEINE Tools — beurteile den Diff-Text direkt.\n\n"
+        f"```diff\n{diff_block}\n```\n\n"
+        "Ist dies eine sinnvolle, korrekte, in sich abgeschlossene Erweiterung "
+        "Richtung Ziel (Leitplanken eingehalten)? Schreibe zuerst eine kurze "
+        "Begruendung, und als ALLERLETZTE Zeile NUR einen der drei Marker:\n"
+        "`VERDICT: accepted`   (guter Schritt — behalten, der andere baut weiter)\n"
+        "`VERDICT: rejected`   (Schritt mangelhaft — Bau soll nachbessern)\n"
+        "`VERDICT: escalate`   (KEINE sinnvolle Erweiterung mehr moeglich = fertig, "
+        "ODER eine Richtungs-/Risiko-Entscheidung fuer den Owner)\n"
+        "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten.\n\n"
+        "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+
+
 def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
                         build_runner, round_timeout, interval=5, b_tick=None,
                         reviewer="claude"):

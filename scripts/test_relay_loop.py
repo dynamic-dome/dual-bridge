@@ -35,3 +35,23 @@ def test_other_builder_rotates_codex_and_claude():
     import loop_driver
     assert loop_driver._other_builder("codex") == "claude-build"
     assert loop_driver._other_builder("claude-build") == "codex"
+
+
+def test_write_relay_review_task_fields_and_reviewer(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    tid = loop_driver.write_relay_review_task(
+        "loop-r", 2, "Eine CLI-Toolsammlung.", ["nur stdlib"],
+        "bridge/loop-r", "deadbeef", diff="--- a\n+++ b\n+x\n",
+        reviewer="codex-review")
+    doc = (bc.lane_outbox(bc.send_lane()) / f"task-{tid}.md").read_text(encoding="utf-8")
+    fm, body = bc.parse_frontmatter(doc)
+    assert fm["adapter"] == "codex-review"
+    assert fm["kind"] == "review"
+    # Body nennt Ziel + Leitplanken + die drei Marker, NICHT 'Done-Kriterien'.
+    assert "Eine CLI-Toolsammlung." in body and "nur stdlib" in body
+    assert "VERDICT: accepted" in body and "VERDICT: escalate" in body
+    assert "Done-Kriterien" not in body
