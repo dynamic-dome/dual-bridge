@@ -517,6 +517,22 @@ def _git_diff(workdir: Path, base_branch: str) -> str:
     return text
 
 
+def _git_diff_since(workdir: Path, since_ref: str) -> str:
+    """Unified diff of what was added since `since_ref` (since_ref...HEAD).
+
+    The relay-loop uses this so the reviewer judges only THIS round's increment,
+    not the whole accumulated branch (which grows every round). Same _DIFF_LIMIT
+    truncation as _git_diff (never a silent cap)."""
+    cp = _run_git(workdir, "diff", f"{since_ref}...HEAD")
+    text = cp.stdout or ""
+    if len(text) > _DIFF_LIMIT:
+        text = (text[:_DIFF_LIMIT]
+                + f"\n\n[... Diff bei {_DIFF_LIMIT} Zeichen abgeschnitten "
+                  f"(Gesamtlaenge {len(cp.stdout)}); Reviewer urteilt auf dem "
+                  "gezeigten Ausschnitt ...]\n")
+    return text
+
+
 def _tail(text: str | None, limit: int = 2000) -> str | None:
     """Last `limit` chars of text, for error excerpts. Returns None for empty input."""
     if not text:
