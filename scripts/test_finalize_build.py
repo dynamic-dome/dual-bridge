@@ -54,3 +54,25 @@ def test_self_commit_is_detected_and_pushed(tmp_path):
     out = ag.finalize_build(work, "bridge/task-T1", "main", "bridge: task T1")
     assert out.status == "done"
     assert out.commit and "self.py" in out.diff
+
+
+def test_git_diff_since_shows_only_increment(tmp_path):
+    import subprocess
+    import adapter_git
+    wd = tmp_path / "repo"
+    wd.mkdir()
+    def git(*a):
+        subprocess.run(["git", *a], cwd=wd, check=True,
+                       capture_output=True, text=True)
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (wd / "a.txt").write_text("step1\n", encoding="utf-8")
+    git("add", "."); git("commit", "-q", "-m", "s1")
+    first = subprocess.run(["git", "rev-parse", "HEAD"], cwd=wd,
+                           capture_output=True, text=True).stdout.strip()
+    (wd / "b.txt").write_text("step2\n", encoding="utf-8")
+    git("add", "."); git("commit", "-q", "-m", "s2")
+    diff = adapter_git._git_diff_since(wd, first)
+    assert "b.txt" in diff and "step2" in diff
+    assert "a.txt" not in diff  # increment only, not the whole history

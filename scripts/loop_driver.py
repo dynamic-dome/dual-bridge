@@ -148,6 +148,48 @@ def parse_seed(seed_text: str) -> tuple[str, list[str]]:
     return goal, criteria
 
 
+def parse_relay_seed(seed_text: str) -> tuple[str, list[str]]:
+    """Split a relay-loop seed into (ziel, leitplanken).
+
+    Format:
+        ## Ziel
+        <prose, open direction — concrete to vague>
+        ## Leitplanken      (optional)
+        - constraint 1
+        - [ ] constraint 2
+
+    `ziel` is the prose under '## Ziel'. `leitplanken` are the bullet/checklist
+    items under '## Leitplanken' (a leading '- ' and optional '[ ]'/'[x]' are
+    stripped). Leitplanken may be empty/absent (the 'völlig offen' case). Raises
+    ValueError if '## Ziel' is missing or empty."""
+    ziel_lines: list[str] = []
+    leitplanken: list[str] = []
+    section = None
+    for raw in seed_text.splitlines():
+        line = raw.rstrip()
+        low = line.strip().lower()
+        if low.startswith("## ziel"):
+            section = "ziel"
+            continue
+        if low.startswith("## leitplanken"):
+            section = "leitplanken"
+            continue
+        if section == "ziel" and line.strip():
+            ziel_lines.append(line.strip())
+        elif section == "leitplanken":
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                item = stripped[2:].strip()
+                if item[:3] in ("[ ]", "[x]", "[X]"):
+                    item = item[3:].strip()
+                if item:
+                    leitplanken.append(item)
+    ziel = " ".join(ziel_lines).strip()
+    if not ziel:
+        raise ValueError("relay seed has no '## Ziel' block")
+    return ziel, leitplanken
+
+
 # Deny-first patterns — mirrored from orchestrated-bridge's secret-sweep
 # (gate_secret_sweep.py) + a few destructive shell/SQL patterns. Mirrored, not
 # imported, because the gate lives in a separate repo; a later task adds a drift
@@ -417,6 +459,59 @@ def write_goal_review_task(loop_id: str, round_no: int, goal: str,
     return task_id
 
 
+def write_relay_review_task(loop_id: str, round_no: int, ziel: str,
+                            leitplanken: list[str], loop_branch: str,
+                            loop_commit: str, diff: str = "",
+                            reviewer: str = "claude") -> str:
+    """Write a relay-loop kind:review task. The reviewer judges whether the diff
+    is a sensible, correct, self-contained EXTENSION toward `ziel` (honoring
+    leitplanken) and answers with one of three markers. escalate has a double
+    role here: 'no sensible extension left' (saturation) OR an owner
+    direction/risk decision. Tool-less reviewer → diff embedded in the prompt.
+    `reviewer` is the adapter name (claude | codex-review)."""
+    bc.ensure_dirs()
+    me = bc.this_endpoint()
+    lane = bc.send_lane()
+    to = next((ep for ep, cfg in bc.ENDPOINTS.items()
+               if lane in cfg["receives_on"]), "")
+    task_id = bc.make_task_id()
+    fm = {
+        "created": bc.now_iso(), "schema_version": "2",
+        "agent": me, "from": me, "to": to, "purpose": "handoff",
+        "status": "open", "task_id": task_id, "kind": "review",
+        "adapter": reviewer,
+        "loop_id": loop_id, "round": str(round_no),
+        "loop_branch": loop_branch, "loop_commit": loop_commit,
+        "payload": f"{loop_branch}@{loop_commit}",
+        "claimed_by": "", "claimed_at": "",
+    }
+    diff_block = diff.strip() or "(kein Diff — der Bau-Agent meldete keine Erweiterung)"
+    lp_block = ("\n".join(f"- {c}" for c in leitplanken)
+                if leitplanken else "(keine — freie Richtung)")
+    body = (
+        f"## Ziel\n{ziel}\n\n"
+        f"## Leitplanken\n{lp_block}\n\n"
+        f"Der Bau-Agent hat auf `{loop_branch}` (Commit `{loop_commit}`) EINEN "
+        "Erweiterungsschritt gebaut. Hier ist NUR der Diff dieses Schritts gegen "
+        "den vorigen Stand. Du hast KEINE Tools — beurteile den Diff-Text direkt.\n\n"
+        f"```diff\n{diff_block}\n```\n\n"
+        "Ist dies eine sinnvolle, korrekte, in sich abgeschlossene Erweiterung "
+        "Richtung Ziel (Leitplanken eingehalten)? Schreibe zuerst eine kurze "
+        "Begruendung, und als ALLERLETZTE Zeile NUR einen der drei Marker:\n"
+        "`VERDICT: accepted`   (guter Schritt — behalten, der andere baut weiter)\n"
+        "`VERDICT: rejected`   (Schritt mangelhaft — Bau soll nachbessern)\n"
+        "`VERDICT: escalate`   (eine Richtungs-/Risiko-Entscheidung fuer den Owner "
+        "ist noetig — z.B. mehrdeutige Richtung, Architektur-/Sicherheitsfrage)\n"
+        "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten. Hinweis: "
+        "Saettigung ('nichts Sinnvolles mehr hinzuzufuegen') beurteilst DU nicht — "
+        "das entscheidet der Bau-Agent, indem er nichts mehr aendert. escalate ist "
+        "ausschliesslich fuer Owner-Entscheidungen.\n\n"
+        "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
+    bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
+                       bc.build_document(fm, body))
+    return task_id
+
+
 def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
                         build_runner, round_timeout, interval=5, b_tick=None,
                         reviewer="claude"):
@@ -522,6 +617,99 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
     return {"status": "done", "abort_reason": "",
             "verdict": fm_result.get("verdict"),
             "verdict_reason": reason,
+            "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+
+
+def _relay_build_prompt(ziel: str, leitplanken: list[str], feedback: str = "") -> str:
+    """Builder instruction for one relay step. `feedback` carries the prior
+    round's reviewer reason on a reject."""
+    lp = ("\n".join(f"- {c}" for c in leitplanken)
+          if leitplanken else "(keine — freie Richtung)")
+    parts = [
+        f"## Ziel\n{ziel}",
+        f"## Leitplanken\n{lp}",
+        ("Der bisherige Stand liegt auf dem aktuellen Branch. Erweitere ihn um "
+         "GENAU EINEN in sich abgeschlossenen, sinnvollen Schritt Richtung Ziel. "
+         "Halte die Leitplanken ein. Wenn nichts Sinnvolles mehr hinzuzufuegen "
+         "ist, aendere NICHTS (leerer Commit/keine Aenderung) und begruende das "
+         "kurz."),
+    ]
+    if feedback:
+        parts.append(f"## Reviewer-Feedback der Vorrunde (nachbessern)\n{feedback}")
+    return "\n\n".join(parts)
+
+
+def _relay_increment_diff(workdir, prev_commit, fallback_diff: str) -> str:
+    """Diff of THIS round's step. Prefer the real increment (prev_commit...HEAD)
+    when we have a prior commit AND the workdir exists (real run); otherwise fall
+    back to the builder's reported diff (first round, or unit tests with a fake
+    builder and no git workdir). Never raises."""
+    try:
+        if prev_commit and workdir is not None and Path(workdir).exists():
+            inc = adapter_git._git_diff_since(Path(workdir), prev_commit)
+            if inc.strip():
+                return inc
+    except Exception:  # noqa: BLE001 — diff is best-effort; fall back, never crash
+        pass
+    return fallback_diff or ""
+
+
+def _relay_round(loop_id, round_no, ziel, leitplanken, builder_adapter, reviewer,
+                 build_runner, prev_commit, repo, base_branch, round_timeout,
+                 interval=5, b_tick=None):
+    """One relay round: build one step → dangerous-scan → review the INCREMENT.
+    Returns an outcome dict. Mirrors _goal_build_review_round; differences:
+    increment diff for review, saturation on empty build diff, builder/reviewer
+    carried in the outcome."""
+    loop_branch = f"bridge/{loop_id}"
+    fm = {"task_id": bc.make_task_id(), "repo": repo,
+          "base_branch": base_branch, "branch": loop_branch,
+          "workdir_name": loop_id}
+    workroot = _state_dir() / "work"
+    workdir = workroot / loop_id
+    base = {"builder": builder_adapter, "reviewer": reviewer,
+            "verdict": None, "verdict_reason": None, "commit": prev_commit,
+            "diff": "", "saturated": False, "task_id": ""}
+    try:
+        a_res = build_runner(auftrag=_relay_build_prompt(ziel, leitplanken),
+                             fm=fm, workroot=workroot)
+    except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
+        return {**base, "status": "error", "abort_reason": f"A-build crash: {exc}"}
+    if a_res.status != "done":
+        return {**base, "status": "error",
+                "abort_reason": f"A-build error: {a_res.error_text}"}
+
+    # Empty build diff = the builder found nothing sensible to add → saturation.
+    if not (a_res.diff or "").strip():
+        return {**base, "status": "done", "abort_reason": "", "saturated": True,
+                "commit": a_res.commit or prev_commit, "diff": ""}
+
+    danger = scan_dangerous(a_res.diff or "")
+    if danger is not None:
+        return {**base, "status": "dangerous", "abort_reason": f"dangerous: {danger}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "danger": danger}
+
+    inc = _relay_increment_diff(workdir, prev_commit, a_res.diff or "")
+    task_id = write_relay_review_task(loop_id, round_no, ziel, leitplanken,
+                                      loop_branch, a_res.commit or "",
+                                      diff=inc, reviewer=reviewer)
+    if b_tick is not None:
+        b_tick(task_id)
+    fm_result = wait_for_result(task_id, timeout=round_timeout, interval=interval)
+    if fm_result is None:
+        return {**base, "status": "timeout",
+                "abort_reason": f"timeout in round {round_no}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    if fm_result.get("status") == "error":
+        return {**base, "status": "error",
+                "abort_reason": f"B error in round {round_no}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    reason = fm_result.get("verdict_reason")
+    if not _reason_carries_signal(reason):
+        body_reason = _reason_from_body(fm_result.get("_body"))
+        reason = body_reason or fm_result.get("payload") or reason or ""
+    return {**base, "status": "done", "abort_reason": "",
+            "verdict": fm_result.get("verdict"), "verdict_reason": reason,
             "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
 
 
@@ -684,6 +872,11 @@ def _reviewer_adapter(reviewer: str | None, builder_adapter: str | None) -> str:
     if builder_adapter == "claude-build":
         return "codex-review"
     return "claude"
+
+
+def _other_builder(adapter: str) -> str:
+    """The opposite builder for relay rotation. codex <-> claude-build."""
+    return "claude-build" if adapter == "codex" else "codex"
 
 
 def _goal_build_runner(adapter: str | None):
@@ -874,6 +1067,114 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                 repo=repo, branch=loop_branch, workdir=workdir)
         except Exception:  # noqa: BLE001 — never crash on the escalation push
             escalation_pushed = False
+    return _summary()
+
+
+# ---------------------------------------------------------------------------
+# Stufe B: relay-loop (codex <-> claude-build, abwechselnd mit Gegenmodell-Review)
+# ---------------------------------------------------------------------------
+
+def _relay_runner_with_feedback(runner, ziel, leitplanken, feedback):
+    """Wrap a build runner so its `auftrag` is the relay build prompt (with the
+    prior reject feedback). Keeps _relay_round agnostic of prompt construction."""
+    prompt = _relay_build_prompt(ziel, leitplanken, feedback)
+    def run(auftrag, fm, workroot):  # auftrag from _relay_round is ignored; we own it
+        return runner(auftrag=prompt, fm=fm, workroot=workroot)
+    return run
+
+
+def run_relay_loop(ziel, leitplanken, repo, base_branch, max_rounds,
+                   round_timeout, interval=5, start_adapter="codex",
+                   build_runner_for=None, b_tick=None, loop_id=None):
+    """Collaborative extension loop (Stufe B). Two models alternately build one
+    sensible step each on a shared accumulating branch and review each other
+    (reviewer = opposite model). Builder rotates on `accepted`; on `rejected` the
+    same builder retries with the reviewer's feedback. Ends on saturation (clean
+    success), owner-escalate, dangerous, or max_rounds. Returns a summary dict."""
+    if build_runner_for is None:
+        import runners as _runners
+        def build_runner_for(adapter):
+            return _runners.RUNNERS[adapter]
+    if loop_id is None:
+        loop_id = _next_loop_id()
+    loop_branch = f"bridge/{loop_id}"
+    builder_adapter = start_adapter
+    prev_commit = None
+    prev_reason = ""
+    rounds_done = 0
+    accepted = False
+    saturated = False
+    escalated = False
+    escalation_trigger = ""
+    final_commit = ""
+    aborted = False
+    abort_reason = ""
+
+    def _summary():
+        return {"loop_id": loop_id, "rounds_done": rounds_done,
+                "accepted": accepted, "saturated": saturated,
+                "escalated": escalated, "escalation_trigger": escalation_trigger,
+                "final_commit": final_commit, "final_branch": loop_branch,
+                "aborted": aborted, "abort_reason": abort_reason}
+
+    for round_no in range(max_rounds):
+        reviewer = _reviewer_adapter(None, builder_adapter)
+        out = _relay_round(
+            loop_id=loop_id, round_no=round_no, ziel=ziel,
+            leitplanken=leitplanken, builder_adapter=builder_adapter,
+            reviewer=reviewer,
+            build_runner=_relay_runner_with_feedback(
+                build_runner_for(builder_adapter), ziel, leitplanken, prev_reason),
+            prev_commit=prev_commit, repo=repo, base_branch=base_branch,
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+        append_state(loop_id, {"round": round_no, "side": "relay",
+                               "builder": out["builder"], "reviewer": out["reviewer"],
+                               "verdict": out.get("verdict"),
+                               "verdict_reason": out.get("verdict_reason"),
+                               "commit": out.get("commit"),
+                               "saturated": out.get("saturated"),
+                               "status": out["status"]})
+        final_commit = out.get("commit") or final_commit
+
+        if out["status"] == "dangerous":
+            escalated = True
+            escalation_trigger = "dangerous_action"
+            _escalate(loop_id, "dangerous_action", round_no, loop_branch,
+                      out.get("commit") or "", ziel, leitplanken,
+                      prev_commit, out.get("danger", ""), "")
+            break
+        if out["status"] != "done":
+            # build/review error or timeout — a hard abort (NOT a clean stop and
+            # NOT an owner escalation). The CLI maps `aborted` to exit 1 so a
+            # failed run never masquerades as success (Codex-Verifier MAJOR
+            # 2026-06-14). No ESCALATION file (nothing for the owner to decide).
+            aborted = True
+            abort_reason = out.get("abort_reason") or out["status"]
+            break
+        if out.get("saturated"):
+            saturated = True
+            accepted = True  # nothing sensible left = clean success
+            break
+
+        verdict = out.get("verdict")
+        if verdict == "accepted":
+            rounds_done += 1
+            prev_commit = out.get("commit")
+            prev_reason = ""
+            builder_adapter = _other_builder(builder_adapter)  # rotate on accept
+            accepted = True
+        elif verdict == "escalate":
+            escalated = True
+            escalation_trigger = "reviewer_requested"
+            _escalate(loop_id, "reviewer_requested", round_no, loop_branch,
+                      out.get("commit") or "", ziel, leitplanken,
+                      prev_commit, out.get("verdict_reason") or "", "")
+            break
+        else:  # rejected (or unknown) → same builder retries with feedback
+            rounds_done += 1
+            prev_reason = out.get("verdict_reason") or ""
+            accepted = False
+
     return _summary()
 
 
@@ -1071,9 +1372,10 @@ def main(argv: list[str] | None = None) -> int:
                              "(default: config.json poll_interval / env "
                              "DUAL_BRIDGE_POLL_INTERVAL / 5.0).")
     parser.add_argument("--mode", default="ping-pong",
-                        choices=["ping-pong", "build-review", "goal-loop"],
+                        choices=["ping-pong", "build-review", "goal-loop", "relay-loop"],
                         help="ping-pong (Stage 1), build-review (Stage 2b), "
-                             "or goal-loop (Stage 3).")
+                             "goal-loop (Stage 3), or relay-loop (Stufe B: beide "
+                             "bauen abwechselnd, Gegenmodell reviewt).")
     parser.add_argument("--repo", default="",
                         help="Repo URL/path to build in (build-review mode).")
     parser.add_argument("--base-branch", default="main",
@@ -1112,7 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[A] --mode ping-pong --adapter {args.adapter} braucht --repo "
               "(der Build committet auf den Loop-Branch).")
         return 2
-    if args.mode in ("build-review", "goal-loop") and not args.repo:
+    if args.mode in ("build-review", "goal-loop", "relay-loop") and not args.repo:
         print(f"[A] --mode {args.mode} braucht --repo.")
         return 2
 
@@ -1193,6 +1495,35 @@ def main(argv: list[str] | None = None) -> int:
                   f"siehe ESCALATION-{summary['loop_id']}.md")
             return 3
         return 1
+
+    if args.mode == "relay-loop":
+        start = args.adapter if args.adapter in ("codex", "claude-build") else "codex"
+        try:
+            ziel, leitplanken = parse_relay_seed(args.seed)
+        except ValueError as exc:
+            print(f"[A] ungueltiger relay-Seed: {exc}")
+            return 2
+        print(f"[A] relay-loop: ziel={ziel!r} leitplanken={len(leitplanken)} "
+              f"start={start} repo={args.repo} max_rounds={args.max_rounds}")
+        summary = run_relay_loop(
+            ziel=ziel, leitplanken=leitplanken, repo=args.repo,
+            base_branch=args.base_branch, max_rounds=args.max_rounds,
+            round_timeout=args.round_timeout, interval=args.interval,
+            start_adapter=start, build_runner_for=None, b_tick=None)
+        print("=" * 60)
+        print(f"[A] relay-loop {summary['loop_id']} fertig.")
+        print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
+        print(f"    Saettigung: {summary['saturated']} | Eskaliert: {summary['escalated']}")
+        if summary.get("aborted"):
+            print(f"    ABGEBROCHEN: {summary.get('abort_reason')}")
+        print(f"    Branch: {summary['final_branch']} @ {summary['final_commit']}")
+        print(f"    History: {_state_dir() / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+        print("=" * 60)
+        if summary["escalated"]:
+            return 3
+        if summary.get("aborted"):
+            return 1  # build/review error or timeout — not a success (Verifier MAJOR)
+        return 0
 
     print(f"[A] Bridge-Root: {bc.bridge_root()}")
     print(f"[A] Loop: seed={args.seed} max_rounds={args.max_rounds} "
