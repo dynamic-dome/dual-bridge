@@ -728,6 +728,11 @@ def _reviewer_adapter(reviewer: str | None, builder_adapter: str | None) -> str:
     return "claude"
 
 
+def _other_builder(adapter: str) -> str:
+    """The opposite builder for relay rotation. codex <-> claude-build."""
+    return "claude-build" if adapter == "codex" else "codex"
+
+
 def _goal_build_runner(adapter: str | None):
     """Builder selection for goal-loop mode.
 

@@ -29,3 +29,9 @@ def test_parse_relay_seed_missing_ziel_raises():
     import loop_driver
     with pytest.raises(ValueError):
         loop_driver.parse_relay_seed("## Leitplanken\n- x\n")
+
+
+def test_other_builder_rotates_codex_and_claude():
+    import loop_driver
+    assert loop_driver._other_builder("codex") == "claude-build"
+    assert loop_driver._other_builder("claude-build") == "codex"
