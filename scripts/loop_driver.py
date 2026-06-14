@@ -617,6 +617,99 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
             "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
 
 
+def _relay_build_prompt(ziel: str, leitplanken: list[str], feedback: str = "") -> str:
+    """Builder instruction for one relay step. `feedback` carries the prior
+    round's reviewer reason on a reject."""
+    lp = ("\n".join(f"- {c}" for c in leitplanken)
+          if leitplanken else "(keine — freie Richtung)")
+    parts = [
+        f"## Ziel\n{ziel}",
+        f"## Leitplanken\n{lp}",
+        ("Der bisherige Stand liegt auf dem aktuellen Branch. Erweitere ihn um "
+         "GENAU EINEN in sich abgeschlossenen, sinnvollen Schritt Richtung Ziel. "
+         "Halte die Leitplanken ein. Wenn nichts Sinnvolles mehr hinzuzufuegen "
+         "ist, aendere NICHTS (leerer Commit/keine Aenderung) und begruende das "
+         "kurz."),
+    ]
+    if feedback:
+        parts.append(f"## Reviewer-Feedback der Vorrunde (nachbessern)\n{feedback}")
+    return "\n\n".join(parts)
+
+
+def _relay_increment_diff(workdir, prev_commit, fallback_diff: str) -> str:
+    """Diff of THIS round's step. Prefer the real increment (prev_commit...HEAD)
+    when we have a prior commit AND the workdir exists (real run); otherwise fall
+    back to the builder's reported diff (first round, or unit tests with a fake
+    builder and no git workdir). Never raises."""
+    try:
+        if prev_commit and workdir is not None and Path(workdir).exists():
+            inc = adapter_git._git_diff_since(Path(workdir), prev_commit)
+            if inc.strip():
+                return inc
+    except Exception:  # noqa: BLE001 — diff is best-effort; fall back, never crash
+        pass
+    return fallback_diff or ""
+
+
+def _relay_round(loop_id, round_no, ziel, leitplanken, builder_adapter, reviewer,
+                 build_runner, prev_commit, repo, base_branch, round_timeout,
+                 interval=5, b_tick=None):
+    """One relay round: build one step → dangerous-scan → review the INCREMENT.
+    Returns an outcome dict. Mirrors _goal_build_review_round; differences:
+    increment diff for review, saturation on empty build diff, builder/reviewer
+    carried in the outcome."""
+    loop_branch = f"bridge/{loop_id}"
+    fm = {"task_id": bc.make_task_id(), "repo": repo,
+          "base_branch": base_branch, "branch": loop_branch,
+          "workdir_name": loop_id}
+    workroot = _state_dir() / "work"
+    workdir = workroot / loop_id
+    base = {"builder": builder_adapter, "reviewer": reviewer,
+            "verdict": None, "verdict_reason": None, "commit": prev_commit,
+            "diff": "", "saturated": False, "task_id": ""}
+    try:
+        a_res = build_runner(auftrag=_relay_build_prompt(ziel, leitplanken),
+                             fm=fm, workroot=workroot)
+    except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
+        return {**base, "status": "error", "abort_reason": f"A-build crash: {exc}"}
+    if a_res.status != "done":
+        return {**base, "status": "error",
+                "abort_reason": f"A-build error: {a_res.error_text}"}
+
+    # Empty build diff = the builder found nothing sensible to add → saturation.
+    if not (a_res.diff or "").strip():
+        return {**base, "status": "done", "abort_reason": "", "saturated": True,
+                "commit": a_res.commit or prev_commit, "diff": ""}
+
+    danger = scan_dangerous(a_res.diff or "")
+    if danger is not None:
+        return {**base, "status": "dangerous", "abort_reason": f"dangerous: {danger}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "danger": danger}
+
+    inc = _relay_increment_diff(workdir, prev_commit, a_res.diff or "")
+    task_id = write_relay_review_task(loop_id, round_no, ziel, leitplanken,
+                                      loop_branch, a_res.commit or "",
+                                      diff=inc, reviewer=reviewer)
+    if b_tick is not None:
+        b_tick(task_id)
+    fm_result = wait_for_result(task_id, timeout=round_timeout, interval=interval)
+    if fm_result is None:
+        return {**base, "status": "timeout",
+                "abort_reason": f"timeout in round {round_no}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    if fm_result.get("status") == "error":
+        return {**base, "status": "error",
+                "abort_reason": f"B error in round {round_no}",
+                "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+    reason = fm_result.get("verdict_reason")
+    if not _reason_carries_signal(reason):
+        body_reason = _reason_from_body(fm_result.get("_body"))
+        reason = body_reason or fm_result.get("payload") or reason or ""
+    return {**base, "status": "done", "abort_reason": "",
+            "verdict": fm_result.get("verdict"), "verdict_reason": reason,
+            "commit": a_res.commit, "diff": a_res.diff or "", "task_id": task_id}
+
+
 def _is_conflict_copy(name: str) -> bool:
     # Same heuristic as handoff_poll._is_conflict_copy / handoff_collect.
     return "(" in name and ")" in name
