@@ -148,6 +148,48 @@ def parse_seed(seed_text: str) -> tuple[str, list[str]]:
     return goal, criteria
 
 
+def parse_relay_seed(seed_text: str) -> tuple[str, list[str]]:
+    """Split a relay-loop seed into (ziel, leitplanken).
+
+    Format:
+        ## Ziel
+        <prose, open direction — concrete to vague>
+        ## Leitplanken      (optional)
+        - constraint 1
+        - [ ] constraint 2
+
+    `ziel` is the prose under '## Ziel'. `leitplanken` are the bullet/checklist
+    items under '## Leitplanken' (a leading '- ' and optional '[ ]'/'[x]' are
+    stripped). Leitplanken may be empty/absent (the 'völlig offen' case). Raises
+    ValueError if '## Ziel' is missing or empty."""
+    ziel_lines: list[str] = []
+    leitplanken: list[str] = []
+    section = None
+    for raw in seed_text.splitlines():
+        line = raw.rstrip()
+        low = line.strip().lower()
+        if low.startswith("## ziel"):
+            section = "ziel"
+            continue
+        if low.startswith("## leitplanken"):
+            section = "leitplanken"
+            continue
+        if section == "ziel" and line.strip():
+            ziel_lines.append(line.strip())
+        elif section == "leitplanken":
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                item = stripped[2:].strip()
+                if item[:3] in ("[ ]", "[x]", "[X]"):
+                    item = item[3:].strip()
+                if item:
+                    leitplanken.append(item)
+    ziel = " ".join(ziel_lines).strip()
+    if not ziel:
+        raise ValueError("relay seed has no '## Ziel' block")
+    return ziel, leitplanken
+
+
 # Deny-first patterns — mirrored from orchestrated-bridge's secret-sweep
 # (gate_secret_sweep.py) + a few destructive shell/SQL patterns. Mirrored, not
 # imported, because the gate lives in a separate repo; a later task adds a drift
