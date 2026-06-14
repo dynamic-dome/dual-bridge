@@ -500,9 +500,12 @@ def write_relay_review_task(loop_id: str, round_no: int, ziel: str,
         "Begruendung, und als ALLERLETZTE Zeile NUR einen der drei Marker:\n"
         "`VERDICT: accepted`   (guter Schritt — behalten, der andere baut weiter)\n"
         "`VERDICT: rejected`   (Schritt mangelhaft — Bau soll nachbessern)\n"
-        "`VERDICT: escalate`   (KEINE sinnvolle Erweiterung mehr moeglich = fertig, "
-        "ODER eine Richtungs-/Risiko-Entscheidung fuer den Owner)\n"
-        "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten.\n\n"
+        "`VERDICT: escalate`   (eine Richtungs-/Risiko-Entscheidung fuer den Owner "
+        "ist noetig — z.B. mehrdeutige Richtung, Architektur-/Sicherheitsfrage)\n"
+        "Die Verdikt-Zeile darf NICHTS ausser dem Marker enthalten. Hinweis: "
+        "Saettigung ('nichts Sinnvolles mehr hinzuzufuegen') beurteilst DU nicht — "
+        "das entscheidet der Bau-Agent, indem er nichts mehr aendert. escalate ist "
+        "ausschliesslich fuer Owner-Entscheidungen.\n\n"
         "## Ergebnis\n<wird vom Reviewer gefuellt>\n")
     bc.write_text_utf8(bc.lane_outbox(lane) / f"task-{task_id}.md",
                        bc.build_document(fm, body))
@@ -1104,12 +1107,15 @@ def run_relay_loop(ziel, leitplanken, repo, base_branch, max_rounds,
     escalated = False
     escalation_trigger = ""
     final_commit = ""
+    aborted = False
+    abort_reason = ""
 
     def _summary():
         return {"loop_id": loop_id, "rounds_done": rounds_done,
                 "accepted": accepted, "saturated": saturated,
                 "escalated": escalated, "escalation_trigger": escalation_trigger,
-                "final_commit": final_commit, "final_branch": loop_branch}
+                "final_commit": final_commit, "final_branch": loop_branch,
+                "aborted": aborted, "abort_reason": abort_reason}
 
     for round_no in range(max_rounds):
         reviewer = _reviewer_adapter(None, builder_adapter)
@@ -1138,8 +1144,12 @@ def run_relay_loop(ziel, leitplanken, repo, base_branch, max_rounds,
                       prev_commit, out.get("danger", ""), "")
             break
         if out["status"] != "done":
-            # build/review error or timeout — stop with the reason, no escalation file.
-            escalation_trigger = out.get("abort_reason", out["status"])
+            # build/review error or timeout — a hard abort (NOT a clean stop and
+            # NOT an owner escalation). The CLI maps `aborted` to exit 1 so a
+            # failed run never masquerades as success (Codex-Verifier MAJOR
+            # 2026-06-14). No ESCALATION file (nothing for the owner to decide).
+            aborted = True
+            abort_reason = out.get("abort_reason") or out["status"]
             break
         if out.get("saturated"):
             saturated = True
@@ -1504,11 +1514,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[A] relay-loop {summary['loop_id']} fertig.")
         print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
         print(f"    Saettigung: {summary['saturated']} | Eskaliert: {summary['escalated']}")
+        if summary.get("aborted"):
+            print(f"    ABGEBROCHEN: {summary.get('abort_reason')}")
         print(f"    Branch: {summary['final_branch']} @ {summary['final_commit']}")
         print(f"    History: {_state_dir() / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
         print("=" * 60)
         if summary["escalated"]:
             return 3
+        if summary.get("aborted"):
+            return 1  # build/review error or timeout — not a success (Verifier MAJOR)
         return 0
 
     print(f"[A] Bridge-Root: {bc.bridge_root()}")

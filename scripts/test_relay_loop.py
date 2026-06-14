@@ -225,3 +225,38 @@ def test_cli_relay_loop_requires_repo(monkeypatch, tmp_path, capsys):
                            "--seed", "## Ziel\nZ\n"])
     assert rc == 2  # missing --repo
     assert "repo" in capsys.readouterr().out.lower()
+
+
+def test_relay_loop_max_rounds_stops(tmp_path, monkeypatch):
+    """All rounds accepted but never saturates -> stop at max_rounds, clean (not
+    escalated, not aborted). Coverage gap flagged by the final Verifier."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    summary = ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=2,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=_runner_map(["c0", "c1", "c2"]),
+        b_tick=_seq_b_tick(ld, ["accepted", "accepted", "accepted"]))
+    assert summary["rounds_done"] == 2
+    assert summary["escalated"] is False
+    assert summary["aborted"] is False
+    assert summary["saturated"] is False
+
+
+def test_relay_loop_build_error_aborts_not_clean(tmp_path, monkeypatch):
+    """A build/review error must mark the loop `aborted` (-> CLI exit 1), NOT a
+    clean stop and NOT an escalation (Codex-Verifier MAJOR 2026-06-14)."""
+    ld = _reload_as_a(monkeypatch, tmp_path)
+
+    def for_adapter(adapter):
+        def run(auftrag, fm, workroot):
+            return RunnerResult(status="error", error_text="codex kaputt")
+        return run
+
+    summary = ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=3,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=for_adapter, b_tick=lambda tid: None)
+    assert summary["aborted"] is True
+    assert summary["abort_reason"]
+    assert summary["escalated"] is False
+    assert summary["accepted"] is False

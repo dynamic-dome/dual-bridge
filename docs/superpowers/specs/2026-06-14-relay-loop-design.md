@@ -38,7 +38,7 @@ reviewen) ist dieser Loop überhaupt möglich.
 | D4 | Architektur | **Ansatz A** — neuer Modus `relay-loop` + eigene `run_relay_loop`; Bausteine wiederverwendet. |
 | D5 | Rotation | Bau-Rolle wechselt **bei `accepted`**; bei `rejected` bessert derselbe Builder nach. |
 | D6 | Review-Basis | Reviewer bewertet den **Inkrement-Diff** dieser Runde (HEAD vs. vorigen akzeptierten Commit), nicht den ganzen Branch. |
-| D7 | Sättigung | Zweigleisig: Reviewer-`escalate` mit Sättigungsgrund **oder** Builder liefert leeren Diff + Begründung. |
+| D7 | Sättigung | Über den **Builder**: leerer Build-Diff (der Bau-Agent baut nichts mehr) = saubere Sättigung (Exit 0). Reviewer-`escalate` ist **ausschließlich** eine Owner-Eskalation (fail-closed, Exit 3) — NICHT Sättigung. *(Verfeinert 2026-06-14 nach Verifier-Review: ein maschinell-zuverlässiges Trennen von „escalate=Sättigung" vs. „escalate=Owner" am selben Marker ist fragil; der Builder ist die zuverlässige Sättigungsquelle.)* |
 | D8 | Startbuilder | `--adapter` (codex \| claude-build) baut Schritt 1; danach Rotation; Reviewer immer automatisch das Gegenmodell. |
 
 ## Architektur & Modul-Layout (Ansatz A)
@@ -119,7 +119,8 @@ Auftragstext).
 | `accepted` | Schritt bleibt, Rolle wechselt, weiter | — |
 | `rejected` | derselbe Builder bessert nach | — |
 | `escalate` (Owner) | ESCALATION + Stop | 3 |
-| `escalate` (Sättigung) ODER leerer Build-Diff | sauberer Stop „nichts Sinnvolles mehr" | 0 |
+| leerer Build-Diff (Builder baut nichts mehr) | saubere Sättigung „nichts Sinnvolles mehr" | 0 |
+| Build-/Review-Error oder Timeout | harter Abbruch (`aborted`, kein ESCALATION) | 1 |
 | `dangerous` | ESCALATION + Stop | 3 |
 | `max_rounds` erreicht | Stop (so weit gekommen) | 0 |
 | Build-/B-Error/Timeout | Abbruch mit Grund | 1 |
