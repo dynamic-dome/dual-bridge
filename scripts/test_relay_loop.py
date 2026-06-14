@@ -209,3 +209,19 @@ def test_relay_loop_escalate_writes_escalation(tmp_path, monkeypatch):
     assert summary["escalated"] is True
     assert summary["escalation_trigger"] == "reviewer_requested"
     assert ld._escalation_path(summary["loop_id"]).exists()
+
+
+# ---------------------------------------------------------------------------
+# Task 7: CLI --mode relay-loop
+# ---------------------------------------------------------------------------
+
+def test_cli_relay_loop_requires_repo(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    rc = loop_driver.main(["--mode", "relay-loop", "--max-rounds", "2",
+                           "--seed", "## Ziel\nZ\n"])
+    assert rc == 2  # missing --repo
+    assert "repo" in capsys.readouterr().out.lower()

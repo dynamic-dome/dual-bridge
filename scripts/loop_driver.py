@@ -1362,9 +1362,10 @@ def main(argv: list[str] | None = None) -> int:
                              "(default: config.json poll_interval / env "
                              "DUAL_BRIDGE_POLL_INTERVAL / 5.0).")
     parser.add_argument("--mode", default="ping-pong",
-                        choices=["ping-pong", "build-review", "goal-loop"],
+                        choices=["ping-pong", "build-review", "goal-loop", "relay-loop"],
                         help="ping-pong (Stage 1), build-review (Stage 2b), "
-                             "or goal-loop (Stage 3).")
+                             "goal-loop (Stage 3), or relay-loop (Stufe B: beide "
+                             "bauen abwechselnd, Gegenmodell reviewt).")
     parser.add_argument("--repo", default="",
                         help="Repo URL/path to build in (build-review mode).")
     parser.add_argument("--base-branch", default="main",
@@ -1403,7 +1404,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[A] --mode ping-pong --adapter {args.adapter} braucht --repo "
               "(der Build committet auf den Loop-Branch).")
         return 2
-    if args.mode in ("build-review", "goal-loop") and not args.repo:
+    if args.mode in ("build-review", "goal-loop", "relay-loop") and not args.repo:
         print(f"[A] --mode {args.mode} braucht --repo.")
         return 2
 
@@ -1484,6 +1485,31 @@ def main(argv: list[str] | None = None) -> int:
                   f"siehe ESCALATION-{summary['loop_id']}.md")
             return 3
         return 1
+
+    if args.mode == "relay-loop":
+        start = args.adapter if args.adapter in ("codex", "claude-build") else "codex"
+        try:
+            ziel, leitplanken = parse_relay_seed(args.seed)
+        except ValueError as exc:
+            print(f"[A] ungueltiger relay-Seed: {exc}")
+            return 2
+        print(f"[A] relay-loop: ziel={ziel!r} leitplanken={len(leitplanken)} "
+              f"start={start} repo={args.repo} max_rounds={args.max_rounds}")
+        summary = run_relay_loop(
+            ziel=ziel, leitplanken=leitplanken, repo=args.repo,
+            base_branch=args.base_branch, max_rounds=args.max_rounds,
+            round_timeout=args.round_timeout, interval=args.interval,
+            start_adapter=start, build_runner_for=None, b_tick=None)
+        print("=" * 60)
+        print(f"[A] relay-loop {summary['loop_id']} fertig.")
+        print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
+        print(f"    Saettigung: {summary['saturated']} | Eskaliert: {summary['escalated']}")
+        print(f"    Branch: {summary['final_branch']} @ {summary['final_commit']}")
+        print(f"    History: {_state_dir() / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+        print("=" * 60)
+        if summary["escalated"]:
+            return 3
+        return 0
 
     print(f"[A] Bridge-Root: {bc.bridge_root()}")
     print(f"[A] Loop: seed={args.seed} max_rounds={args.max_rounds} "
