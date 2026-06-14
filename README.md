@@ -355,7 +355,7 @@ Spec: `docs/superpowers/specs/2026-06-12-risk-level-mapping-design.md`.
   Resultate zurueck (`POST /api/jobs/<id>/result`). Auf Laptop B aus
   `C:\Users\domes\AI\dual-bridge\scripts` starten, z.B.
   `python -X utf8 .\job_poll.py --once`.
-- ✅ **441 Tests grün** (Collection + voller pytest-Lauf).
+- ✅ **455 Tests grün** (Collection + voller pytest-Lauf).
 
 > **Hinweis zur Begriffsklärung:** „Stufe 3" war im Master-Plan doppelt belegt.
 > Der **freie Goal-Loop** und der DCO-HTTP-Job-Pull sind gebaut. Fuer produktive

@@ -52,7 +52,10 @@ python loop_driver.py --mode goal-loop --repo <url> --max-rounds 4 \
 # Nach escalate: geschärften Seed schreiben, dann fortsetzen:
 python loop_driver.py --mode goal-loop --resume <loop_id> --repo <url> --max-rounds 4
 ```
-Modi: `ping-pong` (Stage 1) | `build-review` (Stage 2b) | `goal-loop` (Stage 3).
+Modi: `ping-pong` (Stage 1) | `build-review` (Stage 2b) | `goal-loop` (Stage 3) |
+`relay-loop` (Stufe B): beide bauen abwechselnd (codex↔claude-build, Rolle wechselt
+bei `accepted`), Gegenmodell reviewt jeden Schritt, offenes `## Ziel` + optionale
+`## Leitplanken` statt Done-Kriterien; Ende bei Sättigung/Owner-Eskalation/max_rounds.
 Eskaliert (fail-closed) → `state/ESCALATION-<loop_id>.md`.
 **Zwei Timeout-Schranken:** `--round-timeout` (A wartet auf B) UND
 `DUAL_BRIDGE_CODEX_TIMEOUT` (killt `codex exec`, Default 600s). Bei „codex timeout
