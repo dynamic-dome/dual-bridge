@@ -13,7 +13,7 @@ def _reload_as_a(monkeypatch, tmp_path):
     importlib.reload(bc)
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
     return loop_driver
 
 

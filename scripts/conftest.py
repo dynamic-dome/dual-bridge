@@ -27,6 +27,7 @@ from __future__ import annotations
 import importlib
 import os
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -41,6 +42,22 @@ _PREFIX = "DUAL_BRIDGE"
 # write into the shared, cross-device Drive folder — exactly the HIGHEST-PRIORITY
 # isolation violation (global CLAUDE.md rule 3). We forbid it structurally.
 _REAL_DRIVE_FRAGMENT = "dynamic_sharepoint"
+
+# The real A-side loop-state dir (scripts/state/). A test that resolves
+# DUAL_BRIDGE_STATE to this path would leak LOOP-*.jsonl / ESCALATION-*.md /
+# work-clones into the live state dir (#7923). Forbid it structurally, same
+# poison-guard pattern as the Drive root above.
+_REAL_STATE_DIR = os.path.normcase(
+    os.path.abspath(Path(__file__).resolve().parent / "state"))
+
+
+def _assert_not_real_state(state: str) -> None:
+    """Poison guard: refuse a DUAL_BRIDGE_STATE that points at scripts/state/."""
+    if os.path.normcase(os.path.abspath(state)) == _REAL_STATE_DIR:
+        raise RuntimeError(
+            f"DUAL_BRIDGE_STATE resolves to the real loop-state dir ({state!r}). "
+            "Tests must run against an isolated tmp state - refusing to proceed."
+        )
 
 
 def _assert_not_real_drive(root: str) -> None:
@@ -112,10 +129,20 @@ def _isolate_dual_bridge_state(tmp_path_factory):
     # non-existent tmp path so config_value() falls through to its fallbacks.
     # test_bridge_config.py overrides this itself to point at a controlled file.
     os.environ["DUAL_BRIDGE_CONFIG"] = str(default_root / "no-config.json")
+    # Isolate the A-side loop-state dir too (#7923). loop_driver._state_dir()
+    # now reads DUAL_BRIDGE_STATE lazily; default every test to a fresh tmp so a
+    # test that triggers append_state/run_*_loop can never leak LOOP-*.jsonl into
+    # the live scripts/state/. A test needing a specific state dir overrides this
+    # itself (the _reload_as_a / append_state helpers do exactly that).
+    state_root = tmp_path_factory.mktemp("bridge-state")
+    os.environ["DUAL_BRIDGE_STATE"] = str(state_root)
+    _assert_not_real_state(os.environ["DUAL_BRIDGE_STATE"])
     _ensure_runners_registered()
     try:
         yield
     finally:
+        # Guard against a test that overrode STATE to the real dir mid-body.
+        _assert_not_real_state(os.environ.get("DUAL_BRIDGE_STATE", str(state_root)))
         # Guard against a test that overrode ROOT to the real Drive mid-body.
         current = os.environ.get("DUAL_BRIDGE_ROOT", "")
         for key in [k for k in os.environ if k.startswith(_PREFIX)]:

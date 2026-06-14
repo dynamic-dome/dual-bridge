@@ -250,9 +250,9 @@ def _isolated_loop_env(ctx: ShadowContext):
         "DUAL_BRIDGE_ENDPOINT",
         "DUAL_BRIDGE_REPO_ALLOWLIST",
         "DUAL_BRIDGE_CODEX_BIN",
+        "DUAL_BRIDGE_STATE",
     ]
     old_env = {key: os.environ.get(key) for key in keys}
-    old_state_dir = loop_driver.STATE_DIR
     try:
         os.environ["DUAL_BRIDGE_ROOT"] = str(ctx.bridge_root)
         os.environ["DUAL_BRIDGE_LOCK"] = str(ctx.lock_path)
@@ -262,10 +262,11 @@ def _isolated_loop_env(ctx: ShadowContext):
             os.environ["DUAL_BRIDGE_CODEX_BIN"] = ctx.codex_bin
         else:
             os.environ.pop("DUAL_BRIDGE_CODEX_BIN", None)
-        loop_driver.STATE_DIR = ctx.state_dir
+        # loop_driver._state_dir() reads DUAL_BRIDGE_STATE lazily, so isolating
+        # the state dir is now just another env override (same as ROOT/LOCK).
+        os.environ["DUAL_BRIDGE_STATE"] = str(ctx.state_dir)
         yield
     finally:
-        loop_driver.STATE_DIR = old_state_dir
         for key, value in old_env.items():
             if value is None:
                 os.environ.pop(key, None)

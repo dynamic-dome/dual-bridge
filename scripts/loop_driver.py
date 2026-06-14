@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -22,7 +23,19 @@ import adapter_git
 import claude_adapter  # noqa: F401
 import claude_build  # noqa: F401 -- registers claude-build
 
-STATE_DIR = Path(__file__).resolve().parent / "state"
+def _state_dir() -> Path:
+    """A-side loop state/history dir (LOOP-*.jsonl, ESCALATION-*.md, work/).
+
+    Resolved LAZILY from DUAL_BRIDGE_STATE on every call -- NEVER frozen as an
+    import-time module constant (CLAUDE.md rule 3.4: a frozen path ignores env
+    overrides and survives delenv+reload teardowns, which is exactly how loop
+    tests leaked real LOOP-*.jsonl into the live scripts/state/, #7923). Same
+    DUAL_BRIDGE_STATE convention as bridge_status/bridge_metrics/etc.; the state
+    is a LOCAL path, deliberately NOT under DUAL_BRIDGE_ROOT (the Drive root)."""
+    override = os.environ.get("DUAL_BRIDGE_STATE")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent / "state"
 
 
 def _reason_carries_signal(reason: str | None) -> bool:
@@ -273,9 +286,9 @@ def scan_dangerous(text: str) -> str | None:
 def append_state(loop_id: str, record: dict) -> None:
     """Append one round record to scripts/state/LOOP-<loop_id>.jsonl (history,
     A-side only). Adds an ISO timestamp. Append-only, never deletes."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _state_dir().mkdir(parents=True, exist_ok=True)
     record = dict(record, ts=bc.now_iso())
-    path = STATE_DIR / f"LOOP-{loop_id}.jsonl"
+    path = _state_dir() / f"LOOP-{loop_id}.jsonl"
     with open(path, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -408,7 +421,7 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
     fm = {"task_id": bc.make_task_id(), "repo": repo,
           "base_branch": base_branch, "branch": loop_branch,
           "workdir_name": loop_id}
-    workroot = STATE_DIR / "work"
+    workroot = _state_dir() / "work"
     try:
         a_res = build_runner(auftrag=auftrag, fm=fm, workroot=workroot)
     except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
@@ -451,7 +464,7 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
     fm = {"task_id": bc.make_task_id(), "repo": repo,
           "base_branch": base_branch, "branch": loop_branch,
           "workdir_name": loop_id}
-    workroot = STATE_DIR / "work"
+    workroot = _state_dir() / "work"
     try:
         a_res = build_runner(auftrag=auftrag, fm=fm, workroot=workroot)
     except Exception as exc:  # noqa: BLE001 — a runner must not crash the loop
@@ -585,7 +598,7 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
 
 
 def _escalation_path(loop_id: str):
-    return STATE_DIR / f"ESCALATION-{loop_id}.md"
+    return _state_dir() / f"ESCALATION-{loop_id}.md"
 
 
 def write_escalation(loop_id: str, trigger: str, round_no: int, branch: str,
@@ -600,7 +613,7 @@ def write_escalation(loop_id: str, trigger: str, round_no: int, branch: str,
     the resuming owner). The `met` flags are accepted for forward-compat with a
     future per-criterion tracker but are only surfaced when a criterion is
     actually marked met."""
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _state_dir().mkdir(parents=True, exist_ok=True)
     fm = {
         "loop_id": loop_id, "trigger": trigger, "round": str(round_no),
         "branch": branch, "commit": commit, "exit_reason": "escalation",
@@ -750,7 +763,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
             # push reject is recorded but never downgrades the accepted verdict —
             # the work succeeded, only its integration didn't (visible in summary).
             if merge_on_accept:
-                workdir = STATE_DIR / "work" / loop_id
+                workdir = _state_dir() / "work" / loop_id
                 try:
                     new_base = adapter_git.merge_accepted_to_base(
                         repo=repo, branch=loop_branch, base_branch=base_branch,
@@ -829,7 +842,7 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
     # never downgrades the escalation — the DCO button falls back to a manual
     # hint. Mirrors the accept-push credential handling.
     if escalated:
-        workdir = STATE_DIR / "work" / loop_id
+        workdir = _state_dir() / "work" / loop_id
         try:
             escalation_pushed = adapter_git.push_branch_on_escalation(
                 repo=repo, branch=loop_branch, workdir=workdir)
@@ -864,7 +877,7 @@ def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
     aborted = False
     abort_reason = ""
     open_task_id = ""
-    workroot = STATE_DIR / "work"
+    workroot = _state_dir() / "work"
 
     # git-building adapters (repo set) keep the STANDING seed as the auftrag every
     # round; the work-so-far rides on the loop branch's file state, not on the
@@ -1099,7 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    ABGEBROCHEN: {summary['abort_reason']}")
             if summary["open_task_id"]:
                 print(f"    Offener Task: {summary['open_task_id']}")
-        print(f"    History: {STATE_DIR / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+        print(f"    History: {_state_dir() / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
         print("=" * 60)
         return 0 if summary["accepted"] else 1
 
@@ -1112,7 +1125,7 @@ def main(argv: list[str] | None = None) -> int:
             loop_id = args.resume
             old = _escalation_path(loop_id)
             if old.exists():
-                proc = STATE_DIR / "_processed"
+                proc = _state_dir() / "_processed"
                 proc.mkdir(parents=True, exist_ok=True)
                 old.replace(proc / old.name)
         else:
@@ -1169,7 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    ABGEBROCHEN: {summary['abort_reason']}")
         if summary["open_task_id"]:
             print(f"    Offener Task (liegt in der Lane): {summary['open_task_id']}")
-    print(f"    History: {STATE_DIR / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
+    print(f"    History: {_state_dir() / ('LOOP-' + summary['loop_id'] + '.jsonl')}")
     print("=" * 60)
     return 1 if summary["aborted"] else 0
 

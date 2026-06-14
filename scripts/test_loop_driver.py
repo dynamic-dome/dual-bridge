@@ -208,11 +208,25 @@ def test_wait_for_result_ignores_half_written(monkeypatch):
     assert loop_driver.wait_for_result(tid, timeout=2, interval=1) is None
 
 
+def test_state_dir_is_lazy_and_honors_env(tmp_path, monkeypatch):
+    """T13 regression: the loop state dir MUST be resolved lazily from
+    DUAL_BRIDGE_STATE on every call -- not frozen as an import-time module
+    constant (CLAUDE.md rule 3.4). A frozen constant ignored the env override,
+    so loop tests leaked real LOOP-*.jsonl into the live scripts/state/."""
+    import loop_driver
+    # No reload: a truly lazy resolver must pick up env changes immediately.
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path / "a"))
+    assert loop_driver._state_dir() == tmp_path / "a"
+    # A second change is reflected without any reload -> proves freshness.
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path / "b"))
+    assert loop_driver._state_dir() == tmp_path / "b"
+
+
 def test_append_state_writes_jsonl(tmp_path, monkeypatch):
     import importlib
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
     loop_driver.append_state("loop-s", {"round": 0, "side": "B",
                                         "payload_in": "1", "payload_out": "2",
                                         "task_id": "t", "status": "done"})
@@ -249,7 +263,7 @@ def test_run_loop_max_rounds(tmp_path, monkeypatch):
     importlib.reload(bc)
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
     summary = loop_driver.run_loop(
         seed="0", max_rounds=3, adapter="increment",
         round_timeout=5, interval=1, b_tick=_run_b_tick)
@@ -267,7 +281,7 @@ def test_run_loop_aborts_on_timeout(tmp_path, monkeypatch):
     importlib.reload(bc)
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
     summary = loop_driver.run_loop(
         seed="0", max_rounds=3, adapter="increment",
         round_timeout=2, interval=1, b_tick=lambda task_id=None: None)
@@ -290,7 +304,7 @@ def test_run_loop_aborts_on_b_error(tmp_path, monkeypatch):
     importlib.reload(bc)
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
 
     def _b_error_tick(task_id=None):
         """B claimt den offenen A->B-Task und schreibt ein error-Result.
@@ -323,7 +337,7 @@ def test_run_loop_a_error_leaves_jsonl_trace(tmp_path, monkeypatch):
     importlib.reload(bc)
     import loop_driver
     importlib.reload(loop_driver)
-    monkeypatch.setattr(loop_driver, "STATE_DIR", tmp_path)
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
     summary = loop_driver.run_loop(
         seed="not-a-number", max_rounds=3, adapter="increment",
         round_timeout=2, interval=1, b_tick=lambda task_id=None: None)
