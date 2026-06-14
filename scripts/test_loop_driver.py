@@ -208,6 +208,46 @@ def test_wait_for_result_ignores_half_written(monkeypatch):
     assert loop_driver.wait_for_result(tid, timeout=2, interval=1) is None
 
 
+def test_reviewer_adapter_selection():
+    """Reviewer choice (Stufe A, Option 3): explicit --reviewer wins; otherwise
+    auto = the opposite model of the builder, so the build is always judged by
+    the OTHER model (model diversity)."""
+    import loop_driver
+    # Explicit override maps the CLI value to the registered adapter name.
+    assert loop_driver._reviewer_adapter("codex", "codex") == "codex-review"
+    assert loop_driver._reviewer_adapter("claude", "claude-build") == "claude"
+    # Auto (None): opposite model of the builder.
+    assert loop_driver._reviewer_adapter(None, "claude-build") == "codex-review"
+    assert loop_driver._reviewer_adapter(None, "codex") == "claude"
+    # Auto for the text/smoke builders stays on the claude reviewer (unchanged).
+    assert loop_driver._reviewer_adapter(None, "echo") == "claude"
+    assert loop_driver._reviewer_adapter(None, None) == "claude"
+
+
+def test_goal_review_task_uses_selected_reviewer(tmp_path, monkeypatch):
+    """write_goal_review_task must stamp the chosen reviewer into fm['adapter']
+    (was hardcoded 'claude' -- the asymmetry this Stufe removes)."""
+    monkeypatch.setenv("DUAL_BRIDGE_ENDPOINT", "claude@laptop-a")
+    monkeypatch.setenv("DUAL_BRIDGE_STATE", str(tmp_path))
+    import importlib
+    importlib.reload(bc)
+    import loop_driver
+    importlib.reload(loop_driver)
+    tid = loop_driver.write_goal_review_task(
+        "loop-x", 0, "Ziel", ["k1"], "bridge/loop-x", "abc123",
+        diff="--- a\n+++ b\n", reviewer="codex-review")
+    doc = (bc.lane_outbox(bc.send_lane()) / f"task-{tid}.md").read_text(encoding="utf-8")
+    fm, _ = bc.parse_frontmatter(doc)
+    assert fm["adapter"] == "codex-review"
+    assert fm["kind"] == "review"
+    # Default is still claude (backwards compatible).
+    tid2 = loop_driver.write_goal_review_task(
+        "loop-y", 0, "Ziel", ["k1"], "bridge/loop-y", "def456", diff="x")
+    doc2 = (bc.lane_outbox(bc.send_lane()) / f"task-{tid2}.md").read_text(encoding="utf-8")
+    fm2, _ = bc.parse_frontmatter(doc2)
+    assert fm2["adapter"] == "claude"
+
+
 def test_state_dir_is_lazy_and_honors_env(tmp_path, monkeypatch):
     """T13 regression: the loop state dir MUST be resolved lazily from
     DUAL_BRIDGE_STATE on every call -- not frozen as an import-time module

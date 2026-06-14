@@ -22,6 +22,7 @@ import codex_adapter  # noqa: F401
 import adapter_git
 import claude_adapter  # noqa: F401
 import claude_build  # noqa: F401 -- registers claude-build
+import codex_review_adapter  # noqa: F401 -- registers codex-review (reviewer)
 
 def _state_dir() -> Path:
     """A-side loop state/history dir (LOOP-*.jsonl, ESCALATION-*.md, work/).
@@ -329,10 +330,12 @@ def write_round_task(loop_id: str, round_no: int, payload: str,
 
 
 def write_review_task(loop_id: str, round_no: int, auftrag: str,
-                      loop_branch: str, loop_commit: str, diff: str = "") -> str:
-    """Write an open kind:review task to B (claude reviewer). The reviewer runs
+                      loop_branch: str, loop_commit: str, diff: str = "",
+                      reviewer: str = "claude") -> str:
+    """Write an open kind:review task to the reviewer endpoint. The reviewer runs
     headless WITHOUT tools, so it cannot check out the branch — we embed the
-    build diff in the prompt and have it judge the diff text."""
+    build diff in the prompt and have it judge the diff text. `reviewer` is the
+    adapter name (claude | codex-review); default claude keeps old behaviour."""
     bc.ensure_dirs()
     me = bc.this_endpoint()
     lane = bc.send_lane()
@@ -343,15 +346,15 @@ def write_review_task(loop_id: str, round_no: int, auftrag: str,
         "created": bc.now_iso(), "schema_version": "2",
         "agent": me, "from": me, "to": to, "purpose": "handoff",
         "status": "open", "task_id": task_id, "kind": "review",
-        "adapter": "claude",
+        "adapter": reviewer,
         "loop_id": loop_id, "round": str(round_no),
         "loop_branch": loop_branch, "loop_commit": loop_commit,
         "payload": f"{loop_branch}@{loop_commit}",
         "claimed_by": "", "claimed_at": "",
     }
-    diff_block = diff.strip() or "(kein Diff — codex meldete keine Datei-Aenderung)"
+    diff_block = diff.strip() or "(kein Diff — der Bau-Agent meldete keine Datei-Aenderung)"
     body = (f"## Auftrag\n{auftrag}\n\n"
-            f"Der Bau-Agent (codex) hat auf `{loop_branch}` (Commit `{loop_commit}`) "
+            f"Der Bau-Agent hat auf `{loop_branch}` (Commit `{loop_commit}`) "
             "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
             "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
             f"```diff\n{diff_block}\n```\n\n"
@@ -368,11 +371,13 @@ def write_review_task(loop_id: str, round_no: int, auftrag: str,
 
 def write_goal_review_task(loop_id: str, round_no: int, goal: str,
                            done_criteria: list[str], loop_branch: str,
-                           loop_commit: str, diff: str = "") -> str:
-    """Write a goal-loop kind:review task to B. The reviewer judges the diff
-    against the explicit done-criteria and answers with one of THREE markers:
-    accepted (all criteria met), escalate (needs a human decision), or rejected
-    (gaps remain). Tool-less reviewer → diff embedded in the prompt."""
+                           loop_commit: str, diff: str = "",
+                           reviewer: str = "claude") -> str:
+    """Write a goal-loop kind:review task to the reviewer endpoint. The reviewer
+    judges the diff against the explicit done-criteria and answers with one of
+    THREE markers: accepted (all criteria met), escalate (needs a human
+    decision), or rejected (gaps remain). Tool-less reviewer → diff embedded in
+    the prompt. `reviewer` is the adapter name (claude | codex-review)."""
     bc.ensure_dirs()
     me = bc.this_endpoint()
     lane = bc.send_lane()
@@ -383,18 +388,18 @@ def write_goal_review_task(loop_id: str, round_no: int, goal: str,
         "created": bc.now_iso(), "schema_version": "2",
         "agent": me, "from": me, "to": to, "purpose": "handoff",
         "status": "open", "task_id": task_id, "kind": "review",
-        "adapter": "claude",
+        "adapter": reviewer,
         "loop_id": loop_id, "round": str(round_no),
         "loop_branch": loop_branch, "loop_commit": loop_commit,
         "payload": f"{loop_branch}@{loop_commit}",
         "claimed_by": "", "claimed_at": "",
     }
-    diff_block = diff.strip() or "(kein Diff — codex meldete keine Datei-Aenderung)"
+    diff_block = diff.strip() or "(kein Diff — der Bau-Agent meldete keine Datei-Aenderung)"
     crit_block = "\n".join(f"- [ ] {c}" for c in done_criteria)
     body = (
         f"## Ziel\n{goal}\n\n"
         f"## Done-Kriterien\n{crit_block}\n\n"
-        f"Der Bau-Agent (codex) hat auf `{loop_branch}` (Commit `{loop_commit}`) "
+        f"Der Bau-Agent hat auf `{loop_branch}` (Commit `{loop_commit}`) "
         "gearbeitet. Hier ist der vollstaendige Diff gegen die Basis. Du hast "
         "KEINE Tools — beurteile den Diff-Text direkt, hol nichts nach.\n\n"
         f"```diff\n{diff_block}\n```\n\n"
@@ -413,7 +418,8 @@ def write_goal_review_task(loop_id: str, round_no: int, goal: str,
 
 
 def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
-                        build_runner, round_timeout, interval=5, b_tick=None):
+                        build_runner, round_timeout, interval=5, b_tick=None,
+                        reviewer="claude"):
     """One build→review round. A builds via build_runner (codex), writes a
     kind:review task to B, waits for B's verdict. Returns an outcome dict.
     `b_tick(task_id)` is a test hook; in production B is a separate poller."""
@@ -436,7 +442,7 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
 
     task_id = write_review_task(loop_id, round_no, auftrag,
                                 loop_branch, a_res.commit or "",
-                                diff=a_res.diff or "")
+                                diff=a_res.diff or "", reviewer=reviewer)
     if b_tick is not None:
         b_tick(task_id)
 
@@ -457,7 +463,7 @@ def _build_review_round(loop_id, round_no, auftrag, repo, base_branch,
 
 def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
                              repo, base_branch, build_runner, round_timeout,
-                             interval=5, b_tick=None):
+                             interval=5, b_tick=None, reviewer="claude"):
     """One goal-loop build→review round. Like _build_review_round but the review
     task lists the done-criteria (write_goal_review_task)."""
     loop_branch = f"bridge/{loop_id}"
@@ -490,7 +496,7 @@ def _goal_build_review_round(loop_id, round_no, goal, done_criteria, auftrag,
                 "danger": danger}
     task_id = write_goal_review_task(loop_id, round_no, goal, done_criteria,
                                      loop_branch, a_res.commit or "",
-                                     diff=a_res.diff or "")
+                                     diff=a_res.diff or "", reviewer=reviewer)
     if b_tick is not None:
         b_tick(task_id)
     fm_result = wait_for_result(task_id, timeout=round_timeout, interval=interval)
@@ -530,7 +536,7 @@ def _next_loop_id() -> str:
 
 def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
                           round_timeout, interval=5, build_runner=None,
-                          b_tick=None):
+                          b_tick=None, reviewer="claude"):
     """Asymmetric build↔review loop. A builds (codex) on a stable loop branch,
     B reviews (claude, kind:review → verdict). accepted ends; rejected feeds the
     reviewer's gaps into the next build. Bounded by max_rounds, plus an early
@@ -554,7 +560,8 @@ def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
         out = _build_review_round(
             loop_id=loop_id, round_no=round_no, auftrag=current_auftrag,
             repo=repo, base_branch=base_branch, build_runner=build_runner,
-            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick,
+            reviewer=reviewer)
         append_state(loop_id, {"round": round_no, "side": "build-review",
                                "verdict": out.get("verdict"),
                                "verdict_reason": out.get("verdict_reason"),
@@ -661,6 +668,24 @@ def _escalate(loop_id, trigger, round_no, branch, commit, goal, done_criteria,
                      question=question, progress=progress)
 
 
+def _reviewer_adapter(reviewer: str | None, builder_adapter: str | None) -> str:
+    """Pick the reviewer adapter (Stufe A, Option 3: auto-default + override).
+
+    Explicit `--reviewer` wins and maps the CLI value to the registered adapter
+    name ('codex' -> 'codex-review', 'claude' -> 'claude'). When omitted (None),
+    auto-select the OPPOSITE model of the builder so the build is always judged by
+    the other model: a claude-build build is reviewed by codex-review; everything
+    else (codex/echo/increment/None builder) keeps the claude reviewer — that is
+    the historical default, so codex-builds still go to claude unchanged."""
+    if reviewer == "codex":
+        return "codex-review"
+    if reviewer == "claude":
+        return "claude"
+    if builder_adapter == "claude-build":
+        return "codex-review"
+    return "claude"
+
+
 def _goal_build_runner(adapter: str | None):
     """Builder selection for goal-loop mode.
 
@@ -686,7 +711,7 @@ def _goal_build_runner(adapter: str | None):
 
 def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
                   round_timeout, interval=5, build_runner=None, b_tick=None,
-                  loop_id=None, merge_on_accept=False):
+                  loop_id=None, merge_on_accept=False, reviewer="claude"):
     """Free work-loop toward an open goal (Stage 3). A builds (codex) on a
     stable loop branch toward `goal`; B reviews the diff against `done_criteria`
     (kind:review → accepted | rejected | escalate). accepted ends successfully.
@@ -727,7 +752,8 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
             loop_id=loop_id, round_no=round_no, goal=goal,
             done_criteria=done_criteria, auftrag=current_auftrag, repo=repo,
             base_branch=base_branch, build_runner=build_runner,
-            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick,
+            reviewer=reviewer)
         append_state(loop_id, {"round": round_no, "side": "goal-loop",
                                "verdict": out.get("verdict"),
                                "verdict_reason": out.get("verdict_reason"),
@@ -1060,6 +1086,11 @@ def main(argv: list[str] | None = None) -> int:
                              "--base-branch and push it, so the next package's "
                              "fresh clone sees this build (cross-package "
                              "accumulation). Fail-soft on conflict.")
+    parser.add_argument("--reviewer", default=None, choices=["claude", "codex"],
+                        help="Who reviews the build (build-review/goal-loop). "
+                             "Default: auto = the opposite model of the builder "
+                             "(claude-build -> codex reviews; codex -> claude "
+                             "reviews). Set explicitly to override.")
     args = parser.parse_args(argv)
 
     # Resolve config-backed defaults (CLI flag wins if given; else env ->
@@ -1099,7 +1130,8 @@ def main(argv: list[str] | None = None) -> int:
             summary = run_build_review_loop(
                 auftrag=args.seed, repo=args.repo, base_branch=args.base_branch,
                 max_rounds=args.max_rounds, round_timeout=args.round_timeout,
-                interval=args.interval, build_runner=None, b_tick=None)
+                interval=args.interval, build_runner=None, b_tick=None,
+                reviewer=_reviewer_adapter(args.reviewer, "codex"))
         except KeyboardInterrupt:
             print("\n[A] Strg+C -- Loop abgebrochen.")
             return 1
@@ -1142,7 +1174,8 @@ def main(argv: list[str] | None = None) -> int:
             base_branch=args.base_branch, max_rounds=args.max_rounds,
             round_timeout=args.round_timeout, interval=args.interval,
             build_runner=_goal_build_runner(args.adapter),
-            loop_id=loop_id, merge_on_accept=args.merge_on_accept)
+            loop_id=loop_id, merge_on_accept=args.merge_on_accept,
+            reviewer=_reviewer_adapter(args.reviewer, args.adapter))
         print(f"    Runden: {summary['rounds_done']}/{args.max_rounds}")
         if summary["accepted"]:
             print(f"    ACCEPTED auf {summary['final_branch']}@"

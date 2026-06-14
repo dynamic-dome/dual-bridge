@@ -313,3 +313,16 @@ def test_claude_build_is_a_builder():
     assert v is not None and v.rule == "level-mismatch"
     # the review-only `claude` adapter is unchanged (still read)
     assert rp.ADAPTER_CAPABILITY["claude"] == "read"
+
+
+def test_codex_review_is_a_reviewer():
+    """Symmetry: codex-review is the codex-side review-only adapter (read), the
+    mirror of claude-build (codex builds / claude reviews <-> claude builds /
+    codex reviews)."""
+    import risk_policy as rp
+    assert rp.ADAPTER_CAPABILITY["codex-review"] == "read"
+    # review + codex-review is allowed (read == read)
+    assert rp.check_task("review", "codex-review", "judge this diff") is None
+    # implement + codex-review is a capability mismatch (R1): a reviewer can't build
+    v = rp.check_task("implement", "codex-review", "add a function")
+    assert v is not None and v.rule == "level-mismatch"

@@ -27,6 +27,7 @@ KIND_LEVEL = {
 }
 ADAPTER_CAPABILITY = {
     "echo": "read", "claude": "read", "increment": "read",
+    "codex-review": "read",
     "codex": "build", "claude-build": "build",
 }
 

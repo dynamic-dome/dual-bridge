@@ -83,7 +83,9 @@ def _ensure_runners_registered() -> None:
     """
     import runners
 
-    for adapter_mod, name in (("codex_adapter", "codex"), ("claude_adapter", "claude")):
+    for adapter_mod, name in (("codex_adapter", "codex"),
+                              ("claude_adapter", "claude"),
+                              ("codex_review_adapter", "codex-review")):
         if name not in runners.RUNNERS:
             mod = importlib.import_module(adapter_mod)
             importlib.reload(mod)
