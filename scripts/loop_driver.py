@@ -1067,6 +1067,107 @@ def run_goal_loop(goal, done_criteria, repo, base_branch, max_rounds,
     return _summary()
 
 
+# ---------------------------------------------------------------------------
+# Stufe B: relay-loop (codex <-> claude-build, abwechselnd mit Gegenmodell-Review)
+# ---------------------------------------------------------------------------
+
+def _relay_runner_with_feedback(runner, ziel, leitplanken, feedback):
+    """Wrap a build runner so its `auftrag` is the relay build prompt (with the
+    prior reject feedback). Keeps _relay_round agnostic of prompt construction."""
+    prompt = _relay_build_prompt(ziel, leitplanken, feedback)
+    def run(auftrag, fm, workroot):  # auftrag from _relay_round is ignored; we own it
+        return runner(auftrag=prompt, fm=fm, workroot=workroot)
+    return run
+
+
+def run_relay_loop(ziel, leitplanken, repo, base_branch, max_rounds,
+                   round_timeout, interval=5, start_adapter="codex",
+                   build_runner_for=None, b_tick=None, loop_id=None):
+    """Collaborative extension loop (Stufe B). Two models alternately build one
+    sensible step each on a shared accumulating branch and review each other
+    (reviewer = opposite model). Builder rotates on `accepted`; on `rejected` the
+    same builder retries with the reviewer's feedback. Ends on saturation (clean
+    success), owner-escalate, dangerous, or max_rounds. Returns a summary dict."""
+    if build_runner_for is None:
+        import runners as _runners
+        def build_runner_for(adapter):
+            return _runners.RUNNERS[adapter]
+    if loop_id is None:
+        loop_id = _next_loop_id()
+    loop_branch = f"bridge/{loop_id}"
+    builder_adapter = start_adapter
+    prev_commit = None
+    prev_reason = ""
+    rounds_done = 0
+    accepted = False
+    saturated = False
+    escalated = False
+    escalation_trigger = ""
+    final_commit = ""
+
+    def _summary():
+        return {"loop_id": loop_id, "rounds_done": rounds_done,
+                "accepted": accepted, "saturated": saturated,
+                "escalated": escalated, "escalation_trigger": escalation_trigger,
+                "final_commit": final_commit, "final_branch": loop_branch}
+
+    for round_no in range(max_rounds):
+        reviewer = _reviewer_adapter(None, builder_adapter)
+        out = _relay_round(
+            loop_id=loop_id, round_no=round_no, ziel=ziel,
+            leitplanken=leitplanken, builder_adapter=builder_adapter,
+            reviewer=reviewer,
+            build_runner=_relay_runner_with_feedback(
+                build_runner_for(builder_adapter), ziel, leitplanken, prev_reason),
+            prev_commit=prev_commit, repo=repo, base_branch=base_branch,
+            round_timeout=round_timeout, interval=interval, b_tick=b_tick)
+        append_state(loop_id, {"round": round_no, "side": "relay",
+                               "builder": out["builder"], "reviewer": out["reviewer"],
+                               "verdict": out.get("verdict"),
+                               "verdict_reason": out.get("verdict_reason"),
+                               "commit": out.get("commit"),
+                               "saturated": out.get("saturated"),
+                               "status": out["status"]})
+        final_commit = out.get("commit") or final_commit
+
+        if out["status"] == "dangerous":
+            escalated = True
+            escalation_trigger = "dangerous_action"
+            _escalate(loop_id, "dangerous_action", round_no, loop_branch,
+                      out.get("commit") or "", ziel, leitplanken,
+                      prev_commit, out.get("danger", ""), "")
+            break
+        if out["status"] != "done":
+            # build/review error or timeout — stop with the reason, no escalation file.
+            escalation_trigger = out.get("abort_reason", out["status"])
+            break
+        if out.get("saturated"):
+            saturated = True
+            accepted = True  # nothing sensible left = clean success
+            break
+
+        verdict = out.get("verdict")
+        if verdict == "accepted":
+            rounds_done += 1
+            prev_commit = out.get("commit")
+            prev_reason = ""
+            builder_adapter = _other_builder(builder_adapter)  # rotate on accept
+            accepted = True
+        elif verdict == "escalate":
+            escalated = True
+            escalation_trigger = "reviewer_requested"
+            _escalate(loop_id, "reviewer_requested", round_no, loop_branch,
+                      out.get("commit") or "", ziel, leitplanken,
+                      prev_commit, out.get("verdict_reason") or "", "")
+            break
+        else:  # rejected (or unknown) → same builder retries with feedback
+            rounds_done += 1
+            prev_reason = out.get("verdict_reason") or ""
+            accepted = False
+
+    return _summary()
+
+
 def run_loop(seed: str, max_rounds: int, adapter: str, round_timeout: int,
              interval: float = 5, b_tick=None, repo: str = "",
              base_branch: str = "main") -> dict:

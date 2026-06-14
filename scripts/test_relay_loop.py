@@ -118,3 +118,94 @@ def test_relay_round_empty_diff_is_saturation(tmp_path, monkeypatch):
         b_tick=lambda tid: None)
     assert out["saturated"] is True
     assert out["status"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: run_relay_loop
+# ---------------------------------------------------------------------------
+
+def _seq_b_tick(ld, verdicts):
+    """b_tick that answers each successive review task with the next verdict."""
+    state = {"i": 0}
+    def tick(task_id):
+        v = verdicts[min(state["i"], len(verdicts) - 1)]
+        state["i"] += 1
+        lane = bc.send_lane()
+        fm = {"created": bc.now_iso(), "schema_version": "2", "task_id": task_id,
+              "status": "done", "kind": "review", "verdict": v,
+              "verdict_reason": f"reason-{v}"}
+        bc.write_text_utf8(bc.lane_inbox(lane) / f"result-{task_id}.md",
+                           bc.build_document(fm, f"## Antwort\nx\nVERDICT: {v}\n"))
+    return tick
+
+
+def _runner_map(commits):
+    """build_runner_for: each call returns the next commit id, alternating none."""
+    state = {"i": 0}
+    def for_adapter(adapter):
+        def run(auftrag, fm, workroot):
+            c = commits[min(state["i"], len(commits) - 1)]
+            state["i"] += 1
+            return RunnerResult(status="done", antwort="b", branch=fm.get("branch"),
+                                commit=c, diff="" if c is None else f"+{c}\n")
+        return run
+    return for_adapter
+
+
+def test_relay_loop_rotates_builder_on_accept(tmp_path, monkeypatch):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    seen = []
+    def for_adapter(adapter):
+        seen.append(adapter)
+        def run(auftrag, fm, workroot):
+            return RunnerResult(status="done", antwort="b", branch=fm.get("branch"),
+                                commit=f"c{len(seen)}", diff=f"+{len(seen)}\n")
+        return run
+    summary = ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=2,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=for_adapter, b_tick=_seq_b_tick(ld, ["accepted", "accepted"]))
+    # Round 0 builder=codex, round 1 builder=claude-build (rotated on accept).
+    assert seen[0] == "codex" and seen[1] == "claude-build"
+    assert summary["rounds_done"] == 2
+
+
+def test_relay_loop_no_rotation_on_reject(tmp_path, monkeypatch):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    seen = []
+    def for_adapter(adapter):
+        seen.append(adapter)
+        def run(auftrag, fm, workroot):
+            return RunnerResult(status="done", antwort="b", branch=fm.get("branch"),
+                                commit=f"c{len(seen)}", diff=f"+{len(seen)}\n")
+        return run
+    ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=2,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=for_adapter, b_tick=_seq_b_tick(ld, ["rejected", "accepted"]))
+    # reject keeps the same builder for round 1.
+    assert seen[0] == "codex" and seen[1] == "codex"
+
+
+def test_relay_loop_saturation_clean_stop(tmp_path, monkeypatch):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    summary = ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=5,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=_runner_map([None]),  # empty diff round 0
+        b_tick=lambda tid: None)
+    assert summary["saturated"] is True
+    assert summary["escalated"] is False
+    assert summary["accepted"] is True  # saturation = clean success
+
+
+def test_relay_loop_escalate_writes_escalation(tmp_path, monkeypatch):
+    ld = _reload_as_a(monkeypatch, tmp_path)
+    summary = ld.run_relay_loop(
+        ziel="Z", leitplanken=[], repo="r", base_branch="main", max_rounds=3,
+        round_timeout=2, interval=1, start_adapter="codex",
+        build_runner_for=_runner_map(["c0", "c1"]),
+        b_tick=_seq_b_tick(ld, ["escalate"]))
+    assert summary["escalated"] is True
+    assert summary["escalation_trigger"] == "reviewer_requested"
+    assert ld._escalation_path(summary["loop_id"]).exists()
