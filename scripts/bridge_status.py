@@ -113,6 +113,16 @@ class NodeTab:
 
 
 @dataclass
+class StreamCard:
+    lane: str = ""
+    directory: str = ""
+    label: str = ""
+    color: str = ""
+    state: str = ""
+    count: int = 0
+
+
+@dataclass
 class Report:
     lanes: list = field(default_factory=list)
     loops: list = field(default_factory=list)
@@ -120,6 +130,7 @@ class Report:
     errors: list = field(default_factory=list)  # (lane, name)-Quarantäne-Liste
     liveness: list = field(default_factory=list)
     node_tabs: list = field(default_factory=list)
+    stream_cards: list = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
 
@@ -382,6 +393,46 @@ def build_node_tabs(lanes: list[LaneStatus]) -> list[NodeTab]:
     return tabs
 
 
+def build_stream_cards(lanes: list[LaneStatus]) -> list[StreamCard]:
+    cards: list[StreamCard] = []
+    for lane in lanes:
+        cards.extend([
+            StreamCard(
+                lane=lane.lane,
+                directory="outbox/",
+                label="outbox",
+                color="blue",
+                state="in Bearbeitung",
+                count=len(lane.open) + len(lane.claimed),
+            ),
+            StreamCard(
+                lane=lane.lane,
+                directory="inbox/",
+                label="inbox",
+                color="green",
+                state="abgeschlossen",
+                count=len(lane.results),
+            ),
+            StreamCard(
+                lane=lane.lane,
+                directory="_processed/",
+                label="_processed",
+                color="green",
+                state="abgeschlossen",
+                count=lane.processed_count,
+            ),
+            StreamCard(
+                lane=lane.lane,
+                directory="_errors/",
+                label="_errors",
+                color="red",
+                state="Fehler",
+                count=lane.errors_count,
+            ),
+        ])
+    return cards
+
+
 def build_report(lanes: list | None = None, state_dir: Path | None = None) -> Report:
     """Vollständigen Read-Only-Snapshot bauen: alle Lanes + Loops + Eskalationen
     + Liveness. Schreibt nichts (rein lesend)."""
@@ -391,6 +442,7 @@ def build_report(lanes: list | None = None, state_dir: Path | None = None) -> Re
     rep = Report()
     rep.lanes = [scan_lane(lane) for lane in lanes]
     rep.node_tabs = build_node_tabs(rep.lanes)
+    rep.stream_cards = build_stream_cards(rep.lanes)
     rep.loops = scan_loops(state_dir)
     rep.escalations = scan_escalations(state_dir)
 
@@ -436,6 +488,7 @@ def render_json(report: Report) -> str:
         "lanes": [dataclasses.asdict(l) for l in report.lanes],
         "liveness": [dataclasses.asdict(l) for l in report.liveness],
         "node_tabs": [dataclasses.asdict(t) for t in report.node_tabs],
+        "stream_cards": [dataclasses.asdict(c) for c in report.stream_cards],
         "summary": dict(report.summary),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -480,6 +533,21 @@ def render_text(report: Report) -> str:
             lines.append(
                 f"  [{tab.indicator}] {tab.label}  model={tab.model}  "
                 f"active_lane={tab.active_lane or '?'}  state={tab.state}"
+            )
+        lines.append("")
+
+    if report.stream_cards:
+        lines.append("--- streaming-cards ---")
+        current_lane = None
+        for card in report.stream_cards:
+            if card.lane != current_lane:
+                if current_lane is not None:
+                    lines.append("")
+                current_lane = card.lane
+                lines.append(f"  lane-{card.lane}")
+            lines.append(
+                f"    [{card.color}] {card.directory:<12} "
+                f"{card.state:<15} count={card.count}"
             )
         lines.append("")
 

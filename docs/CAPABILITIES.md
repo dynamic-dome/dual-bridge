@@ -21,3 +21,7 @@
 - Knotenstatus: `red` = attention needed bei Dateien in `_errors/`, `green` =
   offene oder geclaimte Arbeit auf der aktiven Lane, `gray` = idle.
 - Die JSON-Ausgabe enthaelt dieselben Knoten-Metadaten unter `node_tabs`.
+- Die Text- und JSON-Ansicht enthaelt farbcodierte Streaming-Karten je Lane:
+  `outbox/` blau fuer laufende Arbeit, `inbox/` und `_processed/` gruen fuer
+  abgeschlossene Durchlaeufe, `_errors/` rot fuer Fehlerquarantaene. `--watch`
+  aktualisiert diese Karten live mit jedem Dashboard-Refresh.
