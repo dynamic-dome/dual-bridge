@@ -283,6 +283,24 @@ def test_render_text_urgent_first() -> None:
     print("  status OK — render_text shows escalations + _errors before lane tables")
 
 
+def test_render_text_node_tabs_show_metadata_and_state() -> None:
+    _fresh_bridge()
+    bc, bs = _reload()
+    bc.lane_errors("B-to-A").mkdir(parents=True, exist_ok=True)
+    bc.write_text_utf8(bc.lane_errors("B-to-A") / "task-bad.md", "x")
+    _write_task(bc, "A-to-B", task_id="20260603-120000-000011-0-1111")
+
+    report = bs.build_report()
+    text = bs.render_text(report)
+
+    assert "--- node-tabs ---" in text, text
+    assert "[red] Laptop A  model=claude  active_lane=B-to-A  state=attention needed" in text
+    assert "[green] Laptop B  model=codex  active_lane=A-to-B  state=active" in text
+    assert text.find("[red] Laptop A") < text.find("[green] Laptop B"), text
+    assert text.find("--- node-tabs ---") < text.find("--- lane-A-to-B ---"), text
+    print("  status OK — render_text shows vertical node tabs with model/lane/state")
+
+
 # --- (k) empty tree -> calm output, no crash --------------------------------
 def test_build_report_empty_tree() -> None:
     _fresh_bridge()
@@ -326,6 +344,7 @@ def main() -> int:
         test_scan_liveness_live_and_dead,
         test_render_json_has_top_level_keys,
         test_render_text_urgent_first,
+        test_render_text_node_tabs_show_metadata_and_state,
         test_build_report_empty_tree,
         test_dashboard_is_read_only,
     ]

@@ -103,12 +103,23 @@ class LivenessStatus:
 
 
 @dataclass
+class NodeTab:
+    label: str = ""
+    endpoint: str = ""
+    model: str = ""
+    active_lane: str = ""
+    state: str = "idle"  # active | idle | attention needed
+    indicator: str = "gray"  # green | gray | red
+
+
+@dataclass
 class Report:
     lanes: list = field(default_factory=list)
     loops: list = field(default_factory=list)
     escalations: list = field(default_factory=list)
     errors: list = field(default_factory=list)  # (lane, name)-Quarantäne-Liste
     liveness: list = field(default_factory=list)
+    node_tabs: list = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
 
@@ -337,6 +348,40 @@ def _all_lanes() -> list:
     return lanes
 
 
+def _node_label(endpoint: str) -> str:
+    suffix = endpoint.rsplit("-", 1)[-1].upper()
+    return f"Laptop {suffix}" if suffix in ("A", "B") else endpoint
+
+
+def build_node_tabs(lanes: list[LaneStatus]) -> list[NodeTab]:
+    by_lane = {lane.lane: lane for lane in lanes}
+    tabs: list[NodeTab] = []
+    for endpoint, cfg in bc.ENDPOINTS.items():
+        active_lanes = list(cfg.get("receives_on", []))
+        active_lane = ",".join(active_lanes)
+        lane_stats = [by_lane.get(lane) for lane in active_lanes]
+        errors = sum(st.errors_count for st in lane_stats if st is not None)
+        active = sum(len(st.open) + len(st.claimed) for st in lane_stats if st is not None)
+        if errors:
+            state = "attention needed"
+            indicator = "red"
+        elif active:
+            state = "active"
+            indicator = "green"
+        else:
+            state = "idle"
+            indicator = "gray"
+        tabs.append(NodeTab(
+            label=_node_label(endpoint),
+            endpoint=endpoint,
+            model=endpoint.split("@", 1)[0],
+            active_lane=active_lane,
+            state=state,
+            indicator=indicator,
+        ))
+    return tabs
+
+
 def build_report(lanes: list | None = None, state_dir: Path | None = None) -> Report:
     """Vollständigen Read-Only-Snapshot bauen: alle Lanes + Loops + Eskalationen
     + Liveness. Schreibt nichts (rein lesend)."""
@@ -345,6 +390,7 @@ def build_report(lanes: list | None = None, state_dir: Path | None = None) -> Re
 
     rep = Report()
     rep.lanes = [scan_lane(lane) for lane in lanes]
+    rep.node_tabs = build_node_tabs(rep.lanes)
     rep.loops = scan_loops(state_dir)
     rep.escalations = scan_escalations(state_dir)
 
@@ -389,6 +435,7 @@ def render_json(report: Report) -> str:
         "loops": [dataclasses.asdict(l) for l in report.loops],
         "lanes": [dataclasses.asdict(l) for l in report.lanes],
         "liveness": [dataclasses.asdict(l) for l in report.liveness],
+        "node_tabs": [dataclasses.asdict(t) for t in report.node_tabs],
         "summary": dict(report.summary),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -425,6 +472,15 @@ def render_text(report: Report) -> str:
         lines.append("!! _errors/ Quarantäne !!")
         for err in report.errors:
             lines.append(f"  - [{err['lane']}] {err['name']}")
+        lines.append("")
+
+    if report.node_tabs:
+        lines.append("--- node-tabs ---")
+        for tab in report.node_tabs:
+            lines.append(
+                f"  [{tab.indicator}] {tab.label}  model={tab.model}  "
+                f"active_lane={tab.active_lane or '?'}  state={tab.state}"
+            )
         lines.append("")
 
     # 3) Lane-Tabellen (Normalbetrieb).

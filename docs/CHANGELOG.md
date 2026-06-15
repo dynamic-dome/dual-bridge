@@ -9,6 +9,11 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Vertikale Knoten-Tabs im Status-Dashboard (`scripts/bridge_status.py`):**
+  Die Text-Ansicht zeigt jetzt vor den Lane-Details je einen Tab fuer Laptop A
+  und Laptop B mit konfiguriertem Modell, aktiver Empfangs-Lane und farbigem
+  Zustandsindikator (`green` aktiv, `gray` idle, `red` attention needed bei
+  Dateien in `_errors/`). JSON enthaelt dieselben Metadaten unter `node_tabs`.
 - **`claude-build`-Adapter (symmetrisch zu codex, `scripts/claude_build.py`):**
   Neuer Builder-Adapter mit `capability=build`, der `claude -p` agentic (Tools ein)
   in einem Wegwerf-Clone ausführt, einen Branch `bridge/task-<id>` committet und
