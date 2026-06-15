@@ -9,6 +9,14 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Superpowers-Skill-Export `dual-bridge-two-model-review`:**
+  `docs/superpowers/skills/dual-bridge-two-model-review/SKILL.md` exportiert das
+  dual-bridge Verifier/Builder-Pattern als wiederverwendbaren Skill. Er umfasst
+  die Zwei-Modell-Matrix (`codex` baut / `claude` reviewt,
+  `claude-build` baut / `codex-review` reviewt), die Wiederverwendung ueber
+  `goal-loop` und `relay-loop`, die drei Review-Marker (`VERDICT: accepted`,
+  `VERDICT: rejected`, `VERDICT: escalate`) und den Doku-DoD fuer
+  `docs/CHANGELOG.md` + `docs/CAPABILITIES.md`.
 - **Vertikale Knoten-Tabs im Status-Dashboard (`scripts/bridge_status.py`):**
   Die Text-Ansicht zeigt jetzt vor den Lane-Details je einen Tab fuer Laptop A
   und Laptop B mit konfiguriertem Modell, aktiver Empfangs-Lane und farbigem
