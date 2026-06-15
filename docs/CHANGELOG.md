@@ -22,6 +22,11 @@ Commit-Hashes verweisen auf `main`.
   und Laptop B mit konfiguriertem Modell, aktiver Empfangs-Lane und farbigem
   Zustandsindikator (`green` aktiv, `gray` idle, `red` attention needed bei
   Dateien in `_errors/`). JSON enthaelt dieselben Metadaten unter `node_tabs`.
+- **Farbcodierte Streaming-Karten im Status-Dashboard (`scripts/bridge_status.py`):**
+  Jede Lane rendert jetzt live aktualisierte Karten fuer `outbox/`, `inbox/`,
+  `_processed/` und `_errors/`: blau = in Bearbeitung, gruen = abgeschlossen,
+  rot = Fehler. Die JSON-Ausgabe stellt dieselbe Sicht unter `stream_cards`
+  bereit; `--watch` berechnet die Karten bei jedem Refresh neu.
 - **`claude-build`-Adapter (symmetrisch zu codex, `scripts/claude_build.py`):**
   Neuer Builder-Adapter mit `capability=build`, der `claude -p` agentic (Tools ein)
   in einem Wegwerf-Clone ausführt, einen Branch `bridge/task-<id>` committet und

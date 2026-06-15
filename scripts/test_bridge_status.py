@@ -251,7 +251,8 @@ def test_render_json_has_top_level_keys() -> None:
     report = bs.build_report()
     text = bs.render_json(report)
     obj = json.loads(text)  # must be valid JSON
-    for key in ("escalations", "errors", "loops", "lanes", "liveness", "summary"):
+    for key in ("escalations", "errors", "loops", "lanes", "liveness",
+                "node_tabs", "stream_cards", "summary"):
         assert key in obj, f"missing top-level key {key!r} in {list(obj)}"
     print("  status OK — render_json emits valid JSON with all top-level keys")
 
@@ -301,6 +302,45 @@ def test_render_text_node_tabs_show_metadata_and_state() -> None:
     print("  status OK — render_text shows vertical node tabs with model/lane/state")
 
 
+def test_streaming_cards_show_lane_file_flow_colors_and_counts() -> None:
+    _fresh_bridge()
+    bc, bs = _reload()
+    tid_open = "20260603-120000-000012-0-1212"
+    tid_claimed = "20260603-120000-000013-0-1313"
+    tid_done = "20260603-120000-000014-0-1414"
+    _write_task(bc, "A-to-B", task_id=tid_open)
+    _write_task(bc, "A-to-B", task_id=tid_claimed, claimed="laptop-b")
+    _write_result(bc, "A-to-B", task_id=tid_done)
+    bc.lane_processed("A-to-B").mkdir(parents=True, exist_ok=True)
+    bc.write_text_utf8(bc.lane_processed("A-to-B") / f"task-{tid_open}.md", "x")
+    bc.lane_errors("A-to-B").mkdir(parents=True, exist_ok=True)
+    bc.write_text_utf8(bc.lane_errors("A-to-B") / "task-bad.md", "x")
+
+    report = bs.build_report(lanes=["A-to-B"])
+    cards = {(c.lane, c.directory): c for c in report.stream_cards}
+    assert cards[("A-to-B", "outbox/")].color == "blue"
+    assert cards[("A-to-B", "outbox/")].state == "in Bearbeitung"
+    assert cards[("A-to-B", "outbox/")].count == 2
+    assert cards[("A-to-B", "inbox/")].color == "green"
+    assert cards[("A-to-B", "inbox/")].count == 1
+    assert cards[("A-to-B", "_processed/")].color == "green"
+    assert cards[("A-to-B", "_processed/")].count == 1
+    assert cards[("A-to-B", "_errors/")].color == "red"
+    assert cards[("A-to-B", "_errors/")].state == "Fehler"
+    assert cards[("A-to-B", "_errors/")].count == 1
+
+    obj = json.loads(bs.render_json(report))
+    assert obj["stream_cards"][0]["directory"] == "outbox/"
+    text = bs.render_text(report)
+    assert "--- streaming-cards ---" in text, text
+    assert "[blue] outbox/" in text, text
+    assert "[green] inbox/" in text, text
+    assert "[green] _processed/" in text, text
+    assert "[red] _errors/" in text, text
+    assert text.find("--- streaming-cards ---") < text.find("--- lane-A-to-B ---"), text
+    print("  status OK — streaming cards visualize outbox/inbox/_processed/_errors")
+
+
 # --- (k) empty tree -> calm output, no crash --------------------------------
 def test_build_report_empty_tree() -> None:
     _fresh_bridge()
@@ -345,6 +385,7 @@ def main() -> int:
         test_render_json_has_top_level_keys,
         test_render_text_urgent_first,
         test_render_text_node_tabs_show_metadata_and_state,
+        test_streaming_cards_show_lane_file_flow_colors_and_counts,
         test_build_report_empty_tree,
         test_dashboard_is_read_only,
     ]
