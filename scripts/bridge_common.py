@@ -615,10 +615,20 @@ def _subprocess_run_quiet(cmd: list[str]) -> str:
     decodes the full output faithfully, where a utf-8+errors='replace' decode
     would only be safe for the bare pid digits and corrupt everything else."""
     import subprocess
+    # CREATE_NO_WINDOW: die ops-Konsole pollt /api/ops/status im Sekundentakt und
+    # loest dabei diese PID-Checks aus (tasklist via _pid_exists, powershell
+    # Get-CimInstance via _pid_cmdline — je Endpoint A/B + Worker-Heartbeat).
+    # Der DCO-uvicorn laeuft fensterlos (pythonw), also wuerde Windows fuer jedes
+    # dieser Konsolen-Kinder ein NEUES Fenster aufmachen -> bei jedem Konsolen-
+    # Update blitzen mehrere PowerShell-Fenster auf. Das Flag unterdrueckt sie.
+    # getattr(..., 0): CREATE_NO_WINDOW existiert nur auf Windows; 0 ist auf POSIX
+    # der no-op-Default (dieser Pfad wird dort ohnehin nie erreicht).
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True,
                             encoding="oem",
-                            stdin=subprocess.DEVNULL)
+                            stdin=subprocess.DEVNULL,
+                            creationflags=no_window)
         return cp.stdout or ""
     except (OSError, ValueError, LookupError):
         # LookupError: the 'oem' codec is Windows-only; on a non-Windows host

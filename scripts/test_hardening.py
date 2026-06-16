@@ -464,6 +464,21 @@ def test_subprocess_run_quiet_uses_oem_encoding() -> None:
     print("  QW2 OK — tasklist-Lesestelle nutzt encoding='oem'")
 
 
+def test_subprocess_run_quiet_suppresses_console_window() -> None:
+    """QW4: the CMD/PowerShell PID-checks run windowless. The ops console polls
+    /api/ops/status in a fensterlos (pythonw) uvicorn, so each tasklist /
+    Get-CimInstance child would otherwise pop a console window every refresh."""
+    import inspect
+    import bridge_common as bc
+    src = inspect.getsource(bc._subprocess_run_quiet)
+    code = src.split('"""', 2)[-1] if src.count('"""') >= 2 else src
+    assert "creationflags=" in code, \
+        "_subprocess_run_quiet setzt kein creationflags (Fenster blitzt auf)"
+    assert "CREATE_NO_WINDOW" in code, \
+        "_subprocess_run_quiet nutzt nicht CREATE_NO_WINDOW"
+    print("  QW4 OK — PID-Checks laufen fensterlos (CREATE_NO_WINDOW)")
+
+
 def main() -> int:
     _fresh_bridge()
     print("=== Härtungs-Regressionstests (F1/F2/F3/F4 + QW2/QW3) ===")
@@ -489,6 +504,7 @@ def main() -> int:
         test_safe_env_extra_overlay,
         test_ensure_utf8_runtime_idempotent,
         test_subprocess_run_quiet_uses_oem_encoding,
+        test_subprocess_run_quiet_suppresses_console_window,
     ]
     failed = 0
     for t in tests:
