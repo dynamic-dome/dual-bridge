@@ -48,6 +48,65 @@ kleine Worker-Änderungen), **kein** Pending-`promote`.
 **D. Nur Plan, noch nicht bauen.** Implementierung (Phase 2) bewusst aufgeschoben.
 Reihenfolge bei Start bleibt 2a → 2b → 2c → 2d.
 
+## STAND (2026-06-16) + NEXT-SESSION-AUFTRAG
+
+### Was fertig & committet ist
+- **Phase 2a (read-only Backend) — KOMPLETT.** 16 Endpoints `/api/ops/*` in
+  `ops_router.py` (inkl. `/ops/jobs` als topologie-übergreifende Approval-Quelle,
+  §A — in 2c nachgezogen). Commit DCO `434ecde` (+ `/ops/jobs` in `fe9e4e3`).
+- **b1 Mirror-Writer + Worker-Extras — KOMPLETT.** dual-bridge `d70c741`.
+- **Phase 2b FUNDAMENT — KOMPLETT.** `ops_audit.py` + `_auth_mut` + requeue-stale/
+  pending-drain/-delete. Commit DCO `5a758a6`.
+- **Phase 2b SCHWERGEWICHTE — KOMPLETT (Commit DCO `fe9e4e3`).** `POST /ops/loops/start`
+  (preset-only + eigenes `risk_policy.check_task`-422-Gate + repo-Form/Allowlist-
+  Vorabprüfung), `POST /ops/jobs/{id}/cancel`, Toggles `autoqueue`/`finder`,
+  `POST /ops/merge-check/{id}` (ADM), `POST /ops/config/runtime` (ADM, atomare
+  validate-then-apply `os.environ`-Mutation, max_active-Klemmung, Fail-Open-Schutz,
+  Vorher/Nachher-Audit-Diff). resume/overnight = Copy-Befehle (Topologie A, kein Endpoint).
+- **Phase 2c (Desktop Control-Room `/ops`) — KOMPLETT (`fe9e4e3`).** `ops_route.py`
+  (dash_auth-Cookie-Gate, Redirect→/dashboard) + `ops/{ops.html,ops.css,ops.js}`:
+  5 Views (Heute/Lanes/Arbeit/Wissen/System), A↔B-Bottom-Strip, Confirm-Sheet,
+  Copy-Command-Builder (resume/overnight, nie `--merge-on-accept`). Erbt miniapp
+  `tokens.css`/`components.css`. `DASHBOARD_EXTRA_ORIGINS` (opt-in LAN-Origin).
+- **Adversarialer Security-Review eingearbeitet (`fe9e4e3`):** 6 bestätigt, 5 gefixt —
+  (1) ADM-Endpoints ziehen `_check_csrf` auf dem Cookie-Pfad nach (war asymmetrisch
+  zu OD-M); (2) `DASHBOARD_EXTRA_ORIGINS` strikte `scheme://host[:port]`-Validierung;
+  (3) `config/runtime` lehnt Host-Wildcard-Allowlist ab (Fail-Open-Footgun);
+  (4) `/ops/jobs` redaktiert `goal`/`crash_reason`/`verdict`. **Won't-fix (F3):**
+  case-sensitive `_check_csrf` in `api.py` — pre-existing, out-of-scope, kein realer
+  Bypass (Browser-Origins ohne trailing slash, Allowlist normalisiert).
+- **Tests grün:** volle DCO-Suite **2718 passed / 14 vorbestehende Baseline-Fails**
+  (alle in unberührten Modulen); dual-bridge volle Suite **473 passed**;
+  `ops.copy.test.js` (node) 8. DB-Isolation per Row-Count-Snapshot bewiesen
+  (jobs.db/todos.db vor==nach).
+
+### Etablierte Patterns (im next-session UNBEDINGT weiterführen)
+- **Lazy-Import** der dual-bridge-Emitter im Endpoint (nie beim App-Load) via
+  `_load(name)` + `DUAL_BRIDGE_SCRIPTS`. Auth via **Call-Zeit-Delegation** an
+  `api._get_user_or_dashboard[_mutating]` (sonst greift der Test-Bypass nicht).
+- **Audit:** jede mutierende Aktion ruft `ops_audit.record("<verb>", ...)` (redaktiert).
+- **Test-Isolation:** Ops-Tests setzen `DUAL_BRIDGE_ROOT/STATE/OPS_MIRROR`→tmp;
+  Audit/DBs über `DCO_DATA_DIR_OVERRIDE`→tmp (conftest). NIE gegen echtes Drive/DBs.
+- **Security:** loop_id-Allowlist+Containment (Traversal), Repo-URL-Form+
+  Allowlist-fail-closed+`--`-Separator (Injection), generische 502/503, Redaction.
+
+### NÄCHSTE SCHRITTE (offen — 2b/2c sind erledigt)
+1. **Manueller Browser-Smoke von `/ops`** (Frontend ist TDD-exempt, braucht Augen):
+   `DASHBOARD_TOKEN` setzen → `/dashboard?token=<…>` (setzt `dash_auth`-Cookie) →
+   `/ops` öffnen (127.0.0.1, nicht `localhost` — globale Regel §16). Prüfen:
+   5 Views rendern, A↔B-Strip + LEDs, Confirm-Sheet bei destruktiven Aktionen,
+   Risk-Vorschau im Composer, Copy-Commands (resume/overnight). Sample-Spotchecks
+   gegen Markdown-/Pfad-/Secret-Artefakte (globale Regel §4 Pre-Deploy).
+2. **Phase 2d (optional, zuletzt — nur wenn 2a–2c stabil):** minimale additive
+   Miniapp-Ergänzung — Inline-Approval an der eskalierten Karte (→ `merge-check`) +
+   Header-Reminder-Glocke mit Eskalations-Zahl. Keine neuen Tokens/Tabs (s. §2/§6).
+3. **Codex-Verifier-Findings** (falls das Review welche liefert) einarbeiten.
+
+Ground Truth (verifiziert, für 2d/Folgearbeit): `_require_admin`/`_check_csrf`/
+`_is_dashboard_authed` (api.py 357/3344/2843), `route_or_buffer` (bridge_router.py 196),
+`summarize_bridge_job` (432), `bridge_merge.check_and_merge` (545), Preset-Tabelle
+`_PRESETS` (ops_router.py) == miniapp `BRIDGE_PRESETS` (start.js).
+
 ## Verifizierte Ground-Truth-Korrekturen (Reviewer gegen echten Code)
 
 1. `risk_policy.check_task` hat **null** Aufrufe im DCO — fail-closed läuft nur auf dem **Worker** (`job_poll.process_item`), nicht im DCO-Routing.
