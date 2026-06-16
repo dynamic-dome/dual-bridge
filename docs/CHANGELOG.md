@@ -9,6 +9,28 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **b1 Ops-State-Mirror (`scripts/bridge_mirror.py`):** spiegelt A-seitigen,
+  lokal-only Loop-State (`LOOP-*.jsonl`, `ESCALATION-*.md`, `_overnight/runs`,
+  `_notify`) read-only nach `<bridge_root>/_ops-state-mirror/`, damit die
+  DCO-Ops-Konsole auf einem anderen Knoten (DCO ≠ Loop-Host) ihn lesen kann.
+  Schreibt nie in den Source-State; entfernt im Mirror aufgeloeste Eintraege
+  (kein Geister-„offen"). `mirror_state(state_dir, mirror_root, dry_run=)` + CLI
+  (`--dry-run`/`--state`/`--mirror`). Tests: `scripts/test_bridge_mirror.py` (4).
+  Teil der Ops-Konsole (Phase 2a, Plan `docs/plans/2026-06-16-ops-konsole-plan.md`).
+- **Worker-Heartbeat (`scripts/job_poll.py`):** `write_heartbeat()` schreibt
+  `lane-B-to-A/_worker-heartbeat.json` (ts/host/endpoint/pid) je Poll-Iteration in
+  `run_watch` (fail-soft). Echtes Drive-Artefakt → die Ops-Konsole
+  (`/api/ops/worker/heartbeat`) zeigt B-Liveness auch in der getrennten Topologie,
+  statt nur abgeleitet.
+- **Verbunden-Cross-Link:** `loop_driver._next_loop_id()` druckt einen stabilen
+  frühen stdout-Marker `loop_id=<id>`; `job_poll._parse_loop_id()` liest ihn aus
+  dem VOLLEN stdout (vor der 2000-Zeichen-Kürzung) und `_real_run_fn` legt die
+  `loop_id` in den Output → `process_item` reicht sie in den `result_payload` → der
+  DCO-Job trägt seine loop_id, die „Verbunden"-Leiste kann Job↔Loop verknüpfen.
+- **`scripts/register_mirror.ps1`:** Scheduled-Task-Registrar (Task
+  `DualBridgeOpsMirror`), der `bridge_mirror.py` periodisch auf dem Loop-Host
+  laufen lässt. Erst nach grünem `--dry-run` aktivieren.
+- Tests: `scripts/test_worker_extras.py` (6). Volle dual-bridge-Suite **472 grün**.
 - **Superpowers-Skill-Export `dual-bridge-two-model-review`:**
   `docs/superpowers/skills/dual-bridge-two-model-review/SKILL.md` exportiert das
   dual-bridge Verifier/Builder-Pattern als wiederverwendbaren Skill. Er umfasst

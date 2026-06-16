@@ -28,7 +28,10 @@ CLI: --once | --watch [--interval N] [--repo URL] [--max-rounds N] [--round-time
 """
 from __future__ import annotations
 
+import json
 import os
+import re
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -36,6 +39,40 @@ from pathlib import Path
 
 import bridge_common as bc
 import risk_policy
+
+
+_LOOP_ID_MARKER_RE = re.compile(r"loop_id=(loop-[A-Za-z0-9_-]+)")
+
+
+def _parse_loop_id(stdout: str) -> str | None:
+    """Die von loop_driver._next_loop_id frueh gedruckte loop_id aus dem VOLLEN
+    stdout lesen — vor der 2000-Zeichen-Kuerzung des Tails (sonst geht der frueh
+    gedruckte Marker bei langen Builds verloren)."""
+    m = _LOOP_ID_MARKER_RE.search(stdout or "")
+    return m.group(1) if m else None
+
+
+def write_heartbeat(now: str | None = None):
+    """B-Worker-Liveness: schreibt lane-B-to-A/_worker-heartbeat.json — ein echtes
+    Drive-Artefakt, das die DCO-Ops-Konsole liest. Fail-soft: ein Drive-Fehler
+    darf den Worker NIE killen."""
+    try:
+        path = bc.lane_root("B-to-A") / "_worker-heartbeat.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            endpoint = bc.this_endpoint()
+        except Exception:  # noqa: BLE001  (unbekannter Host ohne Override)
+            endpoint = None
+        payload = {
+            "ts": now or bc.now_iso(),
+            "endpoint": endpoint,
+            "host": socket.gethostname(),
+            "pid": os.getpid(),
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return path
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # --- Eingabe-Parser ----------------------------------------------------------
@@ -200,8 +237,13 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=cap,
         )
-        return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
-                "stderr": proc.stderr[-2000:]}
+        full_out = proc.stdout or ""
+        out = {"exit": proc.returncode, "stdout": full_out[-2000:],
+               "stderr": (proc.stderr or "")[-2000:]}
+        lid = _parse_loop_id(full_out)
+        if lid:
+            out["loop_id"] = lid
+        return out
 
     # Live-Stream: Popen + Tee. stdout/stderr getrennt halten (eigene Threads).
     import threading
@@ -229,9 +271,13 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         raise
     t_out.join(timeout=5)
     t_err.join(timeout=5)
-    return {"exit": rc,
-            "stdout": "".join(out_lines)[-2000:],
-            "stderr": "".join(err_lines)[-2000:]}
+    full_out = "".join(out_lines)
+    out = {"exit": rc, "stdout": full_out[-2000:],
+           "stderr": "".join(err_lines)[-2000:]}
+    lid = _parse_loop_id(full_out)
+    if lid:
+        out["loop_id"] = lid
+    return out
 
 
 def _run_fn_accepts_stream(run_fn) -> bool:
@@ -393,6 +439,7 @@ def run_watch(source, *, run_fn=None, interval: int, max_rounds: int,
     idle = 0
     try:
         while True:
+            write_heartbeat()  # b1: Liveness-Artefakt je Poll-Iteration (fail-soft)
             n = tick_fn(source, run_fn=run_fn, max_rounds=max_rounds,
                         round_timeout=round_timeout, **tick_extra)
             if n:

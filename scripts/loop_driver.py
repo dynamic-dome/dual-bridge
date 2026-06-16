@@ -719,7 +719,12 @@ def _is_conflict_copy(name: str) -> bool:
 
 
 def _next_loop_id() -> str:
-    return f"loop-{bc.make_task_id()}"
+    lid = f"loop-{bc.make_task_id()}"
+    # Stabiler stdout-Marker fuer den HTTP-Worker (job_poll._parse_loop_id liest
+    # ihn aus dem vollen stdout): verknuepft den DCO-Job mit dem Loop
+    # ("Verbunden"-Leiste der Ops-Konsole). Frueh gedruckt -> auf jedem Exit-Pfad da.
+    print(f"[A] loop_id={lid}", flush=True)
+    return lid
 
 
 def run_build_review_loop(auftrag, repo, base_branch, max_rounds,
