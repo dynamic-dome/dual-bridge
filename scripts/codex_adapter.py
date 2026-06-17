@@ -181,7 +181,7 @@ from adapter_git import (  # noqa: F401 — back-compat shim (Spec 2026-06-12): 
     _git_clone_or_pull, _git_commit_and_push, _git_diff, _git_status_porcelain,
     _remote_default_branch, _resolve_base_branch, _resolve_https_credential,
     _run_git, _write_askpass_wrapper, merge_accepted_to_base,
-    push_branch_on_escalation,
+    push_branch_on_escalation, safe_build_branch,
 )
 
 CodexResult = RunnerResult  # back-compat alias; existing call sites unchanged
@@ -273,7 +273,7 @@ def run_codex_task(
             return CodexResult(status="error",
                                error_text=f"repo nicht in allowlist abgelehnt: {repo}")
 
-    branch = branch or f"bridge/task-{task_id}"
+    branch = adapter_git.safe_build_branch(task_id, branch)
 
     # 1. codex on PATH?
     codex_exe = codex_bin or shutil.which("codex")

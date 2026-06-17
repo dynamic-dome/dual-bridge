@@ -20,6 +20,7 @@ _MOVED_FUNCS = [
     "_diagnose_clone_failure", "_git_checkout_branch", "_git_status_porcelain",
     "_commits_ahead_of_base", "_changed_files_vs_base", "_git_commit_and_push",
     "merge_accepted_to_base", "push_branch_on_escalation", "_git_diff",
+    "safe_build_branch",
 ]
 _MOVED_OTHER = ["_Cred", "_ASKPASS_HELPER", "_DIFF_LIMIT"]
 

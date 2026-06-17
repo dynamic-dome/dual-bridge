@@ -62,7 +62,7 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
             return RunnerResult(status="error",
                                 error_text=f"repo nicht in allowlist abgelehnt: {repo}")
 
-    branch = branch or f"bridge/task-{task_id}"
+    branch = adapter_git.safe_build_branch(task_id, branch)
     claude_exe = (claude_bin or os.environ.get("DUAL_BRIDGE_CLAUDE_BIN")
                   or shutil.which("claude"))
     if not claude_exe:

@@ -9,6 +9,12 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Builder-Branch-Trust gehaertet (#7924):** `codex` und `claude-build`
+  normalisieren untrusted `fm["branch"]` jetzt ueber den gemeinsamen
+  `adapter_git.safe_build_branch()`. Nur `bridge/*`-Branches werden weitergefuehrt;
+  `main`/`master`/fremde Branches fallen deterministisch auf
+  `bridge/task-<task_id>` zurueck. Tests: `test_codex_branch_override.py`,
+  `test_claude_build.py`, `test_adapter_git_shim.py` plus Loop-Regressionen.
 - **b1 Ops-State-Mirror (`scripts/bridge_mirror.py`):** spiegelt A-seitigen,
   lokal-only Loop-State (`LOOP-*.jsonl`, `ESCALATION-*.md`, `_overnight/runs`,
   `_notify`) read-only nach `<bridge_root>/_ops-state-mirror/`, damit die

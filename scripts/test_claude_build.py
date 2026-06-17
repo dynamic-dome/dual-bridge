@@ -60,6 +60,16 @@ def test_build_commits_and_returns_diff(tmp_path):
     assert res.antwort == "done building"
 
 
+def test_build_rejects_non_bridge_branch_override(tmp_path):
+    origin = _make_origin(tmp_path)
+    fake = _fake_claude(tmp_path, writes="built.py", body="z = 4\n")
+    res = cb.run_claude_build(
+        auftrag="add built.py", repo=origin, base_branch="main", task_id="T-main",
+        workroot=tmp_path / "work", claude_bin=fake, timeout=60, branch="main")
+    assert res.status == "done"
+    assert res.branch == "bridge/task-T-main"
+
+
 def test_no_change_returns_done_with_note(tmp_path):
     origin = _make_origin(tmp_path)
     fake = _fake_claude(tmp_path, writes="README.md", body="base\n", answer="nichts zu tun")

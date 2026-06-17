@@ -38,6 +38,19 @@ class BuildOutcome(NamedTuple):
     note: str | None
 
 
+def safe_build_branch(task_id: str, branch: str | None) -> str:
+    """Return a builder branch that is safe to checkout and push.
+
+    ``branch`` may originate from task frontmatter and is therefore untrusted.
+    Builders may only continue bridge-owned branches; direct base branches such
+    as main/master fall back to the deterministic task branch.
+    """
+    candidate = (branch or "").strip().replace("\\", "/")
+    if candidate.startswith("bridge/") and ".." not in candidate:
+        return candidate
+    return f"bridge/task-{task_id}"
+
+
 def _run_git(workdir: Path | None, *args: str,
              cred: "_Cred | None" = None) -> subprocess.CompletedProcess:
     """Run a git command, capturing output as utf-8. cwd=workdir if given.

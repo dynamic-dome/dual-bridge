@@ -64,6 +64,29 @@ def test_run_codex_task_defaults_to_task_branch(monkeypatch, tmp_path):
     assert used.get("b") == "bridge/task-t-99"
 
 
+def test_run_codex_task_rejects_non_bridge_branch_override(monkeypatch, tmp_path):
+    """Untrusted fm['branch'] must never checkout/push main/master directly."""
+    used = {}
+    monkeypatch.setattr(ag, "_git_clone_or_pull",
+                        lambda r, b, w, **kw: (w / ".git").mkdir(parents=True, exist_ok=True) or w)
+    monkeypatch.setattr(ag, "_git_checkout_branch",
+                        lambda w, branch: used.__setitem__("b", branch))
+    monkeypatch.setattr(ca.shutil, "which", lambda _n: "C:/fake/codex.exe")
+
+    class _Proc:
+        returncode = 0
+        stdout = "done"
+        stderr = ""
+    monkeypatch.setattr(ca.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "_run_codex_exec", lambda *a, **k: _Proc())
+    monkeypatch.setattr(ca, "parse_codex_output", lambda _s: "answer")
+    monkeypatch.setattr(ag, "_git_status_porcelain", lambda _w: [])
+
+    ca.run_codex_task(auftrag="x", repo="r", base_branch="main",
+                      task_id="t-main", workroot=tmp_path, branch="main")
+    assert used.get("b") == "bridge/task-t-main"
+
+
 def test_clone_or_pull_prefers_existing_remote_branch(monkeypatch, tmp_path):
     """If origin/<prefer_branch> exists, _git_clone_or_pull resets to it, not base."""
     workdir = tmp_path / "wd"
