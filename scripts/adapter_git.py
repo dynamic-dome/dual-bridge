@@ -24,6 +24,8 @@ from typing import NamedTuple
 
 from bridge_common import safe_subprocess_env
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 class BuildOutcome(NamedTuple):
     status: str                    # "done" | "error"
@@ -52,7 +54,7 @@ def _run_git(workdir: Path | None, *args: str,
     env = safe_subprocess_env(cred.env if cred else None)
     return subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8",
-        stdin=subprocess.DEVNULL, env=env,
+        stdin=subprocess.DEVNULL, env=env, creationflags=_NO_WINDOW,
     )
 
 
@@ -122,7 +124,7 @@ def _resolve_https_credential(repo: str) -> _Cred:
     fill = subprocess.run(
         ["git", "credential", "fill"],
         input=f"url={repo}\n\n", capture_output=True, text=True,
-        encoding="utf-8", env=safe_subprocess_env(),
+        encoding="utf-8", env=safe_subprocess_env(), creationflags=_NO_WINDOW,
     )
     if fill.returncode != 0:
         return _Cred(env={})

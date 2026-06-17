@@ -40,6 +40,8 @@ from pathlib import Path
 import bridge_common as bc
 import risk_policy
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 _LOOP_ID_MARKER_RE = re.compile(r"loop_id=(loop-[A-Za-z0-9_-]+)")
 
@@ -53,19 +55,28 @@ def _parse_loop_id(stdout: str) -> str | None:
 
 
 def write_heartbeat(now: str | None = None):
-    """B-Worker-Liveness: schreibt lane-B-to-A/_worker-heartbeat.json — ein echtes
-    Drive-Artefakt, das die DCO-Ops-Konsole liest. Fail-soft: ein Drive-Fehler
-    darf den Worker NIE killen."""
+    """Worker-Liveness: schreibt in die Sendelane des aktuellen Endpoints.
+
+    A/B-Rollen duerfen nicht hartcodiert werden: der aktive Worker kann je nach
+    Host/Override laptop-a oder laptop-b sein. Die Ops-Konsole liest deshalb
+    beide bekannten Lanes und waehlt das vorhandene Heartbeat-Artefakt.
+    Fail-soft: ein Drive-Fehler darf den Worker NIE killen.
+    """
     try:
-        path = bc.lane_root("B-to-A") / "_worker-heartbeat.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
         try:
             endpoint = bc.this_endpoint()
         except Exception:  # noqa: BLE001  (unbekannter Host ohne Override)
             endpoint = None
+        try:
+            lane = bc.send_lane(endpoint)
+        except Exception:  # noqa: BLE001
+            lane = bc.DEFAULT_LANE
+        path = bc.lane_root(lane) / "_worker-heartbeat.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "ts": now or bc.now_iso(),
             "endpoint": endpoint,
+            "lane": lane,
             "host": socket.gethostname(),
             "pid": os.getpid(),
         }
@@ -235,7 +246,7 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
             # mangles "—" into "â€"" — which then lands double-encoded in the
             # DCO verdict. errors="replace" keeps a single bad byte from crashing.
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=cap,
+            timeout=cap, creationflags=_NO_WINDOW,
         )
         full_out = proc.stdout or ""
         out = {"exit": proc.returncode, "stdout": full_out[-2000:],
@@ -253,6 +264,7 @@ def _real_run_fn(*, repo: str, seed: str, adapter: str,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         # Same UTF-8 pin as the stream=False path above (Windows CP1252 mojibake).
         text=True, encoding="utf-8", errors="replace", bufsize=1,
+        creationflags=_NO_WINDOW,
     )
     out_lines: list[str] = []
     err_lines: list[str] = []

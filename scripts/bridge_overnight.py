@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -30,6 +31,8 @@ from pathlib import Path
 import bridge_common as bc
 import bridge_status as bs
 import bridge_notify as bn
+
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 OVERNIGHT_DIR_NAME = "_overnight"
 RUNS_DIR_NAME = "runs"
@@ -129,7 +132,7 @@ def _real_run_fn(*, seed_file: Path, seed_text: str, goal: str, repo: str,
         # UTF-8 pin (mirrors job_poll._real_run_fn): without it text=True decodes
         # loop_driver's output with the Windows locale (CP1252) and mangles "—".
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=cap,
+        timeout=cap, creationflags=_NO_WINDOW,
     )
     return {"exit": proc.returncode, "stdout": proc.stdout[-2000:],
             "stderr": proc.stderr[-2000:]}

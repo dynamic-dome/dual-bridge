@@ -24,6 +24,8 @@ from typing import Callable
 import bridge_common as bc
 import loop_driver
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 RUN_LABELS = ("main", "shadow")
 DEFAULT_SHADOW_ROOT = Path(__file__).resolve().parent / "state" / "_shadow_runs"
@@ -309,6 +311,7 @@ def _run_git(workdir: Path | None, *args: str) -> subprocess.CompletedProcess:
         encoding="utf-8",
         stdin=subprocess.DEVNULL,
         env=bc.safe_subprocess_env(),
+        creationflags=_NO_WINDOW,
     )
 
 

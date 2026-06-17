@@ -58,13 +58,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import codex_adapter as ca  # noqa: E402
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 # --- git helper (identical shape to the mirrored test) ----------------------
 def _git(cwd, *args) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(cwd), *args],
         capture_output=True, text=True, encoding="utf-8",
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW,
     )
 
 
@@ -75,7 +77,7 @@ def _make_origin(tmp: Path) -> str:
     seed = tmp / "seed"
     seed.mkdir()
     subprocess.run(["git", "init", "-b", "main", str(seed)], check=True,
-                   capture_output=True)
+                   capture_output=True, creationflags=_NO_WINDOW)
     _git(seed, "config", "user.email", "t@t.local")
     _git(seed, "config", "user.name", "t")
     (seed / "f.txt").write_text("base\n", encoding="utf-8")
@@ -83,7 +85,7 @@ def _make_origin(tmp: Path) -> str:
     _git(seed, "commit", "-m", "base")
     bare = tmp / "origin.git"
     subprocess.run(["git", "clone", "--bare", str(seed), str(bare)],
-                   check=True, capture_output=True)
+                   check=True, capture_output=True, creationflags=_NO_WINDOW)
     return str(bare)
 
 
@@ -217,7 +219,7 @@ def run_mirror(verbose: bool = False) -> tuple[int, str]:
         probe = tmp / "probe"
         clone = subprocess.run(
             ["git", "clone", "--branch", "bridge/loop-SC", origin, str(probe)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, creationflags=_NO_WINDOW,
         )
         if clone.returncode == 0 and (probe / "f.txt").exists():
             pushed_ok = MIRROR_LINE in (probe / "f.txt").read_text(encoding="utf-8")

@@ -18,10 +18,10 @@ Commit-Hashes verweisen auf `main`.
   (`--dry-run`/`--state`/`--mirror`). Tests: `scripts/test_bridge_mirror.py` (4).
   Teil der Ops-Konsole (Phase 2a, Plan `docs/plans/2026-06-16-ops-konsole-plan.md`).
 - **Worker-Heartbeat (`scripts/job_poll.py`):** `write_heartbeat()` schreibt
-  `lane-B-to-A/_worker-heartbeat.json` (ts/host/endpoint/pid) je Poll-Iteration in
-  `run_watch` (fail-soft). Echtes Drive-Artefakt → die Ops-Konsole
-  (`/api/ops/worker/heartbeat`) zeigt B-Liveness auch in der getrennten Topologie,
-  statt nur abgeleitet.
+  `_worker-heartbeat.json` (ts/host/endpoint/lane/pid) je Poll-Iteration in die
+  Sendelane des tatsaechlichen Endpoints (keine hartcodierte A/B-Annahme).
+  Echtes Drive-Artefakt → die Ops-Konsole (`/api/ops/worker/heartbeat`) zeigt
+  Worker-Liveness auch in der getrennten Topologie, statt nur abgeleitet.
 - **Verbunden-Cross-Link:** `loop_driver._next_loop_id()` druckt einen stabilen
   frühen stdout-Marker `loop_id=<id>`; `job_poll._parse_loop_id()` liest ihn aus
   dem VOLLEN stdout (vor der 2000-Zeichen-Kürzung) und `_real_run_fn` legt die
@@ -62,6 +62,14 @@ Commit-Hashes verweisen auf `main`.
   Suite 411 → 427 (16 neue Tests).
 
 ### Behoben
+- **Alle Worker-Subprozesse fensterlos + AST-Sweep:** produktive
+  `scripts/*.py`-Subprozesse tragen jetzt `creationflags=CREATE_NO_WINDOW`
+  (Windows) bzw. `0` (andere OS). Abgedeckte Pfade: Git-Adapter,
+  Overnight-Runner, Claude-Reviewer, DCO-Job-Poller, Live-Mirror, Shadow-Run
+  und Tree-Kill-Helper. Neuer Regressionstest
+  `scripts/test_subprocess_creationflags.py` scannt alle produktiven
+  `subprocess.run/Popen/call/check_output/check_call`-Aufrufe und wird rot,
+  sobald ein neuer Spawn ohne `creationflags` hinzukommt.
 - **Smoke-Preset (echo·echo) goal-loop-tauglich (#7904 / L20):** Der echo-Runner
   produzierte einen LEEREN Diff, den der diff-bewertende Reviewer der DCO-Bridge
   nie accepten konnte → das Smoke-Preset eskalierte strukturell auf `max_rounds`

@@ -14,6 +14,8 @@ import os
 import signal
 import subprocess
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 def _kill_process_tree(pid: int) -> None:
     """Kill `pid` AND all of its descendants. Never raises.
@@ -25,6 +27,7 @@ def _kill_process_tree(pid: int) -> None:
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(pid)],
                 capture_output=True, stdin=subprocess.DEVNULL,
+                creationflags=_NO_WINDOW,
             )
         else:
             try:
@@ -53,7 +56,7 @@ def run_with_tree_kill(cmd, cwd, input_text, timeout, env=None):
     )
     if os.name != "nt":
         popen_kwargs["start_new_session"] = True  # own pgid for killpg
-    proc = subprocess.Popen(cmd, **popen_kwargs)
+    proc = subprocess.Popen(cmd, creationflags=_NO_WINDOW, **popen_kwargs)
     try:
         stdout, stderr = proc.communicate(input=input_text, timeout=timeout)
     except subprocess.TimeoutExpired as exc:

@@ -16,6 +16,8 @@ import sys
 from bridge_common import safe_subprocess_env
 from runners import RunnerResult, register_runner
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 try:  # pragma: no cover - environment dependent
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -114,7 +116,8 @@ def run_claude(auftrag: str, fm: dict, workroot, claude_bin: str | None = None,
     try:
         proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                               encoding="utf-8", input=auftrag,
-                              timeout=timeout, env=env)
+                              timeout=timeout, env=env,
+                              creationflags=_NO_WINDOW)
     except subprocess.TimeoutExpired as exc:
         return RunnerResult(status="error", error_text=f"claude timeout nach {timeout}s",
                             stderr_excerpt=_tail(getattr(exc, "stderr", None)))

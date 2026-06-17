@@ -4,7 +4,7 @@
    job_poll._parse_loop_id liest ihn aus dem (vollen) stdout, process_item reicht
    ihn in den result_payload -> DCO kann Job<->Loop verknuepfen.
 2. Worker-Heartbeat: job_poll.write_heartbeat schreibt ein echtes Drive-Artefakt
-   (lane-B-to-A/_worker-heartbeat.json), run_watch ruft es je Poll-Iteration.
+   in die Sendelane des aktuellen Endpoints, run_watch ruft es je Poll-Iteration.
 
 Isolation: die dual-bridge conftest lenkt DUAL_BRIDGE_ROOT/STATE auf tmp.
 """
@@ -52,9 +52,10 @@ def test_write_heartbeat_creates_artifact():
     path = job_poll.write_heartbeat()
     assert path is not None and path.is_file()
     assert path.name == "_worker-heartbeat.json"
-    assert path.parent.name == "lane-B-to-A"
+    assert path.parent.name == "lane-A-to-B"
     data = json.loads(path.read_text(encoding="utf-8"))
     assert "ts" in data and "host" in data
+    assert data["lane"] == "A-to-B"
 
 
 def test_run_watch_writes_heartbeat_each_iteration():
@@ -67,5 +68,5 @@ def test_run_watch_writes_heartbeat_each_iteration():
     rc = job_poll.run_watch(object(), interval=1, max_rounds=1, round_timeout=1,
                             tick_fn=fake_tick, sleep_fn=fake_sleep)
     assert rc == 0
-    hb = bc.lane_root("B-to-A") / "_worker-heartbeat.json"
+    hb = bc.lane_root("A-to-B") / "_worker-heartbeat.json"
     assert hb.is_file()
