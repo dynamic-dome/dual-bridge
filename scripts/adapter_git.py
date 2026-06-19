@@ -51,6 +51,24 @@ def safe_build_branch(task_id: str, branch: str | None) -> str:
     return f"bridge/task-{task_id}"
 
 
+def safe_workdir_name(task_id: str, workdir_name: str | None) -> str:
+    """Return a safe single-directory worktree name.
+
+    ``workdir_name`` is task frontmatter from the bridge lane. It must never be
+    allowed to escape the configured workroot or select an absolute path.
+    """
+    candidate = (workdir_name or "").strip().replace("\\", "/")
+    if (
+        candidate
+        and candidate not in {".", ".."}
+        and "/" not in candidate
+        and ".." not in candidate
+        and not Path(candidate).is_absolute()
+    ):
+        return candidate
+    return task_id
+
+
 def _run_git(workdir: Path | None, *args: str,
              cred: "_Cred | None" = None) -> subprocess.CompletedProcess:
     """Run a git command, capturing output as utf-8. cwd=workdir if given.

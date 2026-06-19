@@ -282,7 +282,7 @@ def run_codex_task(
                            error_text="codex nicht gefunden -- auf B installiert/im PATH?")
 
     # 2. repo reachable?
-    workdir = Path(workroot) / (workdir_name or task_id)
+    workdir = Path(workroot) / adapter_git.safe_workdir_name(task_id, workdir_name)
     # Resolve the real base branch BEFORE any git op: the loop defaults to 'main',
     # but a 'master'/'trunk' repo would otherwise fail every clone/rev-list/diff
     # (they all reference origin/<base_branch>). One credential resolve here; the

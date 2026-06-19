@@ -246,6 +246,32 @@ def test_task_repo_unreachable() -> None:
     print("  task OK -- unreachable repo -> error before codex call")
 
 
+def test_task_empty_allowlist_allows_repo_and_sanitizes_workdir_name() -> None:
+    import codex_adapter as ca
+    tmp = Path(tempfile.mkdtemp(prefix="task-safe-workdir-"))
+    remote, work_parent = _init_local_repo(tmp)
+    bindir = _write_fake_codex(tmp, mode="write")
+    codex_bin = str(bindir / ("codex.cmd" if os.name == "nt" else "codex"))
+    previous_allow = os.environ.get("DUAL_BRIDGE_REPO_ALLOWLIST")
+    os.environ["DUAL_BRIDGE_REPO_ALLOWLIST"] = ""
+    try:
+        r = ca.run_codex_task(
+            "x", repo=str(remote), base_branch="main", task_id="T9",
+            workroot=work_parent, codex_bin=codex_bin,
+            workdir_name="../escape", branch="../main",
+        )
+    finally:
+        if previous_allow is None:
+            os.environ.pop("DUAL_BRIDGE_REPO_ALLOWLIST", None)
+        else:
+            os.environ["DUAL_BRIDGE_REPO_ALLOWLIST"] = previous_allow
+    assert r.status == "done", f"empty allowlist should allow repo, got {r.status}/{r.error_text}"
+    assert r.branch == "bridge/task-T9"
+    assert (work_parent / "T9").exists(), "unsafe workdir_name must fall back to task_id"
+    assert not (tmp / "escape").exists(), "unsafe workdir_name escaped the workroot"
+    print("  task OK -- empty allowlist permits repo; unsafe branch/workdir are sanitized")
+
+
 def test_task_timeout() -> None:
     r = _run_task("hang", timeout=1)
     assert r.status == "error" and "timeout" in (r.error_text or "").lower(), \

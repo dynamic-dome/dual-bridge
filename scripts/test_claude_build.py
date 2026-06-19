@@ -70,6 +70,21 @@ def test_build_rejects_non_bridge_branch_override(tmp_path):
     assert res.branch == "bridge/task-T-main"
 
 
+def test_build_sanitizes_workdir_name_and_empty_allowlist_allows_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("DUAL_BRIDGE_REPO_ALLOWLIST", "")
+    origin = _make_origin(tmp_path)
+    fake = _fake_claude(tmp_path, writes="built.py", body="z = 5\n")
+    workroot = tmp_path / "work"
+    res = cb.run_claude_build(
+        auftrag="add built.py", repo=origin, base_branch="main", task_id="T-safe",
+        workroot=workroot, claude_bin=fake, timeout=60,
+        branch="../main", workdir_name="../escape")
+    assert res.status == "done"
+    assert res.branch == "bridge/task-T-safe"
+    assert (workroot / "T-safe").exists()
+    assert not (tmp_path / "escape").exists()
+
+
 def test_no_change_returns_done_with_note(tmp_path):
     origin = _make_origin(tmp_path)
     fake = _fake_claude(tmp_path, writes="README.md", body="base\n", answer="nichts zu tun")

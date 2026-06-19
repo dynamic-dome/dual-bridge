@@ -69,7 +69,7 @@ def run_claude_build(auftrag, repo, base_branch, task_id, workroot,
         return RunnerResult(status="error",
                             error_text="claude nicht gefunden — auf B installiert/im PATH?")
 
-    workdir = Path(workroot) / (workdir_name or task_id)
+    workdir = Path(workroot) / adapter_git.safe_workdir_name(task_id, workdir_name)
     # Resolve the real base branch every round (master/main, P007/continuity).
     _bb_cred = adapter_git._resolve_https_credential(repo)
     try:
