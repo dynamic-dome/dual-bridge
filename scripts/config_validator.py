@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from typing import Any
 
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 _NODE_KEYS = ("A", "B")
 _ROOT_REQUIRED = (
     "round_timeout",
@@ -113,6 +114,7 @@ def _run_cli_dry_runs(commands: dict[str, str]) -> None:
                 text=True,
                 timeout=15,
                 check=False,
+                creationflags=_NO_WINDOW,
             )
         except OSError as exc:
             raise ValueError(f"dry-run failed for {field}: {exc}") from exc
