@@ -12,6 +12,9 @@ Commit-Hashes verweisen auf `main`.
 - **Bridge-Completion (`scripts/bridge-completion.bash`):** Bash/Zsh-Completion
   fuer die Lane-Namen `lane-A-to-B`, `lane-B-to-A` und die Bridge-Befehle
   `handoff_write`, `handoff_poll`, `handoff_collect`.
+- **PowerShell-Bridge-Completion (`scripts/bridge-completion.ps1`):**
+  Register-ArgumentCompleter fuer die Lane-Namen `lane-A-to-B`, `lane-B-to-A`
+  und die Bridge-Befehle `handoff_write`, `handoff_poll`, `handoff_collect`.
 - **Setup-Orchestrierung (`scripts/setup.py`):** neuer `main()`-Einstiegspunkt
   fuehrt Scout -> Wizard -> Generator -> Validator aus und schreibt die finale
   `config.json` erst nach gruener Validierung ins Repo-Root. Aufruf:
