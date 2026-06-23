@@ -56,6 +56,57 @@ Auf Laptop B vorher Endpoint setzen:
 `export DUAL_BRIDGE_ENDPOINT=codex@laptop-b`
 (PowerShell: `$env:DUAL_BRIDGE_ENDPOINT="codex@laptop-b"`).
 
+## Shell Completion
+
+Die Completion ergaenzt die Lane-Namen `lane-A-to-B`, `lane-B-to-A` sowie die
+Bridge-Befehle `handoff_write`, `handoff_poll`, `handoff_collect` inklusive der
+`.py`-Skriptnamen.
+
+### Bash
+
+Einmalig in der aktuellen Shell laden:
+
+```bash
+source scripts/bridge-completion.bash
+```
+
+Dauerhaft in `~/.bashrc` registrieren:
+
+```bash
+source ~/AI/dual-bridge/scripts/bridge-completion.bash
+```
+
+### Zsh
+
+Einmalig in der aktuellen Shell laden:
+
+```zsh
+source scripts/bridge-completion.bash
+```
+
+Dauerhaft in `~/.zshrc` registrieren:
+
+```zsh
+source ~/AI/dual-bridge/scripts/bridge-completion.bash
+```
+
+### PowerShell
+
+Einmalig in der aktuellen Shell laden:
+
+```powershell
+. .\scripts\bridge-completion.ps1
+```
+
+Dauerhaft im PowerShell-Profil registrieren:
+
+```powershell
+Add-Content -Path $PROFILE -Value '. C:\Users\domes\AI\dual-bridge\scripts\bridge-completion.ps1'
+```
+
+Danach einen Befehl oder Lane-Praefix tippen, z.B. `python handoff_` oder
+`handoff_write.py lane-`, und `Tab` druecken.
+
 ## Als Agent starten
 
 1. **Spec + Plan lesen:** `docs/superpowers/specs/...stage2a...-design.md` und
