@@ -9,6 +9,11 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Config-Validator (`scripts/config_validator.py`):** neue
+  `validate_config(config_dict)`-API prueft Pflichtfelder auf allen Config-Ebenen,
+  verifiziert Endpoint-CLI-Kommandos per `os.path.exists`/`shutil.which` und
+  erkennt optionale `--version`-Dry-Run-Fehler. Tests:
+  `tests/test_config_validator.py`.
 - **Config-Generator (`scripts/config_generator.py`):** neue
   `generate_config(scout_result, wizard_result)`-API liest das bestehende
   `config.json` als Template, setzt `nodes.A/B.model` und
