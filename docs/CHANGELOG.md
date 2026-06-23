@@ -9,6 +9,11 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Config-Generator (`scripts/config_generator.py`):** neue
+  `generate_config(scout_result, wizard_result)`-API liest das bestehende
+  `config.json` als Template, setzt `nodes.A/B.model` und
+  `endpoints.A/B.command`, validiert Pflichtfelder und gibt ein
+  JSON-serialisierbares Dict zurueck. Tests: `tests/test_config_generator.py`.
 - **Interaktiver Lane-Wizard (`scripts/wizard.py`):** neue
   `InteractiveWizard.ask()`-API fragt die Node-A-Zuweisung per `input()` ab,
   bestaetigt die Auswahl und schlaegt bei genau einer erkannten CLI automatisch
