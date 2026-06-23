@@ -21,6 +21,7 @@ Adapter + endpoint-relative Skripte).
 | `scripts/handoff_poll.py` | Pollen + verarbeiten (Empfänger); `--watch` nutzt optional `watchdog`-Filesystem-Wakeup |
 | `scripts/handoff_collect.py` | Results einsammeln (Sender) |
 | `scripts/loop_driver.py` | Goal-Loop / Build-Review-Loop (Stufe 3, `--mode goal-loop`) |
+| `scripts/setup.py` | Interaktives Setup: Scout -> Wizard -> Generator -> Validator; schreibt `config.json` |
 | `scripts/bridge_status.py` | **Read-only Status-Dashboard** (Tasks/Loops/Eskalationen/Liveness; `--format json`, `--watch`) |
 | `scripts/bridge_notify.py` | **Eskalations-Notifier** (pusht neue `ESCALATION-*.md` per Telegram; `--dry-run`, `--digest`, `--reconcile`) |
 | `scripts/register_notify.ps1` | Optionaler Windows-Task fuer den Notifier (lokaler Trigger) |
@@ -37,6 +38,12 @@ Adapter + endpoint-relative Skripte).
 
 Alle Skripte laufen auf **beiden** Knoten identisch — Richtung nur per
 `DUAL_BRIDGE_ENDPOINT` (Default `claude@laptop-a`).
+
+Ersteinrichtung:
+
+```bash
+python scripts/setup.py
+```
 
 ```bash
 cd ~/AI/dual-bridge/scripts
