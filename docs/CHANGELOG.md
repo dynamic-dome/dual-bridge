@@ -9,6 +9,10 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Interaktiver Lane-Wizard (`scripts/wizard.py`):** neue
+  `InteractiveWizard.ask()`-API fragt die Node-A-Zuweisung per `input()` ab,
+  bestaetigt die Auswahl und schlaegt bei genau einer erkannten CLI automatisch
+  die kanonische A/B-Zuordnung vor. Tests: `tests/test_wizard.py`.
 - **CLI-Scout (`scripts/cli_scout.py`):** neue `Scout.detect()`-API erkennt
   installierte `claude`- und `codex`-CLIs per `shutil.which()` und liefert je
   CLI den gefundenen Pfad oder `None`. Tests: `tests/test_cli_scout.py`.
