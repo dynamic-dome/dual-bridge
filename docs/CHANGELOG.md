@@ -9,6 +9,10 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Setup-Orchestrierung (`scripts/setup.py`):** neuer `main()`-Einstiegspunkt
+  fuehrt Scout -> Wizard -> Generator -> Validator aus und schreibt die finale
+  `config.json` erst nach gruener Validierung ins Repo-Root. Aufruf:
+  `python scripts/setup.py`. Test: `tests/test_setup_e2e.py`.
 - **Config-Validator (`scripts/config_validator.py`):** neue
   `validate_config(config_dict)`-API prueft Pflichtfelder auf allen Config-Ebenen,
   verifiziert Endpoint-CLI-Kommandos per `os.path.exists`/`shutil.which` und
