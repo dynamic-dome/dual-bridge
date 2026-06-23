@@ -9,6 +9,9 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **Bridge-Completion (`scripts/bridge-completion.bash`):** Bash/Zsh-Completion
+  fuer die Lane-Namen `lane-A-to-B`, `lane-B-to-A` und die Bridge-Befehle
+  `handoff_write`, `handoff_poll`, `handoff_collect`.
 - **Setup-Orchestrierung (`scripts/setup.py`):** neuer `main()`-Einstiegspunkt
   fuehrt Scout -> Wizard -> Generator -> Validator aus und schreibt die finale
   `config.json` erst nach gruener Validierung ins Repo-Root. Aufruf:
