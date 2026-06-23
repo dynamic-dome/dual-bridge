@@ -9,6 +9,9 @@ Commit-Hashes verweisen auf `main`.
 ## [Unreleased]
 
 ### Hinzugefuegt
+- **CLI-Scout (`scripts/cli_scout.py`):** neue `Scout.detect()`-API erkennt
+  installierte `claude`- und `codex`-CLIs per `shutil.which()` und liefert je
+  CLI den gefundenen Pfad oder `None`. Tests: `tests/test_cli_scout.py`.
 - **Builder-Branch-Trust gehaertet (#7924):** `codex` und `claude-build`
   normalisieren untrusted `fm["branch"]` jetzt ueber den gemeinsamen
   `adapter_git.safe_build_branch()`. Nur `bridge/*`-Branches werden weitergefuehrt;
